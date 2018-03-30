@@ -1,0 +1,340 @@
+---
+title: "Analyzing Trajectories of Multiple Coin Tossing Experiment"
+author: 'Mark Preston, Student ID- 12191901'
+date: "March 28, 2018"
+output: 
+  html_document: 
+    fig_height: 7
+    fig_width: 9
+---
+
+***
+
+##1. Convergence of probability of tail to 0.5
+
+Check that frequency of "Tails" (outcome equals 1) converges to 0.5 as the number of tosses grows
+
+####What does this say about fairness of the coin?
+
+A coin with .5 probability for both heads and tails is fair. This means that each side has an equal probabilty of coming up during a flip. If the outcomes converge to .5 as the number of tosses goes up, this fairness assumption can be verified.
+
+Use the following seed for reproducibility:
+
+set.seed(12345);
+
+Set the number of flips to 100,000.
+
+###Code explained:
+
+The chunk below sets the number of flips for the simulation to 100,000. This object will be used in the next chunk to run the actual flip simulation.
+
+```{r setting number of flips}
+nFlips<-100000
+```
+
+###Code explained:
+
+The code below runs the coin flip simulation 100,000 times and then plots the results. Before the actual simulation is run, a seed is set for the exercise. Due to the randomness of such a large simulation, the seed makes the event reproducible by setting a specific number associated with the work. As such, this ensure the exact results can be obtained more than once.
+
+Following that, the actual simulation is conducted by sampling either 1 or -1 with replacement 100,000 times. the result is stored as a numeric vector in the Flips object. Trajectory takes the cumulative sum of the Flips object. A cumulative sum works by adding the numbers as they come up, here 1 and -1. The idea is the trajectory with a fair coin will eventually even out to zero. The frequency helps with this by dividingt the trajecotry by the number of flips so this progress can be seen.
+
+The visualization is produced using base R `plot` with accompanying lines to highlight zero. The graph limits have been changed to fit the simulation parameters as well.
+
+###Graph interpretation
+
+After the simulation, it can be seen that the frequency of heads and tails fluctuates in the short term, the first 50 of the sample length, and evens out in the long term. The freq objects divides the number of the trial by the simulation's cumulative sum at that time, so it's not surprising to see it being volatile to begin before evening out. That said, it doesn't fall exactly in line with .5, which would be the expected end point. However, it is close and a table of the heads and tails reveals both sides being nearly even (Heads: 49,916 & Tails: 50,084). Given this, the graph highlights that after 100,000 flips, the frequency of heads to tails is just above .5 with tails being slightly ahead.
+
+```{r coin simulation and visualization}
+set.seed(12345)
+Flips<-sample(0:1,nFlips,repl=T)
+Trajectory<-cumsum(Flips) 
+freq<-Trajectory/(1:nFlips)
+plot(1:length(freq),freq, ylim=c(.4,1),type="l",ylab="Frequency",xlab="Sample Length")
+lines(c(0,nFlips),c(.5,.5))
+plot(1:4000,freq[1:4000], ylim=c(.4,1),type="l",ylab="Frequency",xlab="Sample Length") 
+lines(c(0,4000),c(.5,.5))
+
+#number of heads and tails- not perfectly even, though close
+table(Flips)
+```
+
+***
+
+##2. Check your intuition about random walks
+
+###2.1. One trajectory
+
+Create trajectory of wealth in a game which either pays 1 dollar with probability 0.5 or results in loss of 1 dollar on each step.
+
+Assume that the game is played 1,000,000 times.
+
+Use the same seed.
+
+Increase the number of flips to 1,000,000.
+
+###Code review
+
+Once again, this chunk sets up the simulation.
+
+```{r million flip simulation}
+nFlips<-1000000;
+set.seed(12345)
+Flips<-(sample(0:1,nFlips,repl=T)-.5)*2
+```
+
+###Check your intuition by answering questions before calculation:
+
+####How much do you expect the trajectory of wealth to deviate from zero
+
+I would expect the wealth to be around zero, though not exactly on. The previous simulation with 100,000 flips rendered a close division of heads and tails (Heads was 84 under 0). My guess would be the new simulation would be proportinally around the same over zero but, by aggregate larger (maybe around 1,000, derived from taking 84 * 10). 
+
+####How long do you expect it to stay on one side above or below zero?
+
+I would expect it to be reasonably even up and down corresponding to runs in heads and tails. As such, the plot would be a wavy line bisecting zero a few times. Putting a proportion on it, I would say it should be about 50% over or under zero.
+
+```{r plotting million flip simulation}
+oneTrajectory<-cumsum(Flips)
+plot(oneTrajectory, ylim=c(-1000,1000),type="l")
+lines(c(0,nFlips),c(0,0))
+
+table(Flips)
+```
+
+####How do the observations match your prior expectations? Find at least one alternative way of simulating variable Flips. Repeat the experiment multiple times.
+
+I've rolled the personal simulation and observations into one question. The visualization above shows my intuition was reasonably good on how close the trajectory would end to zero. There were +67 heads, which is in line with the first simulation. However, the percent over zero here looks large (maybe 80% to 85% as a guess), which is out of sync with my intuition. I thought this might have been a bit smaller but, given it's only one example of the simulation, a few more might help illuminate if this variabilty is reasonable to expect from the trajectory.
+
+For this, the simulation I've set up uses `rbinom`. Basically, I've run the simulation 9 times consecutively and stored the results in a data frame to be plotted and reviewed at once. From there, I've added the trajectory for the simulations by creating a pay out varibale corresponding to the dollar value of each flip (1 dollar for heads, -1 dollar for tails) and then taking the cumulative sum for each run. With the data for the simulations saved, the results cna be verified and checked against my intuition next.
+
+```{r setting up and running simulation, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+#prefered plot aesethic
+theme_set(
+  theme_bw()
+)
+
+flip_n <- 9000000
+
+set.seed(1017)
+game_simulation <- data.frame(
+  flip.simulation = rep(c("one", "two", "three", "four", "five", "six",
+                          "seven", "eight", "nine")),
+  game.number = 1:9000000,
+  outcome = rbinom(n = flip_n, size = 1, prob = .5)
+)
+
+game_simulation <- game_simulation %>%
+  group_by(flip.simulation) %>%
+  mutate(pay.out = case_when(
+    outcome == 1 ~ 1,
+    outcome == 0 ~ -1),
+    trajectory = cumsum(pay.out)) %>%
+  ungroup() %>%
+  mutate(flip.simulation = factor(flip.simulation, 
+                             levels = c("one", "two", "three", 
+                                        "four", "five", "six",
+                                        "seven", "eight", "nine")))
+
+```
+
+The final trajectories are all under 2000 dollars with the largest being 1946. The smallest here is close to zero (98). Only two of the nine simulations are under zero. All of these are generally in line with my initial intuitions on where the final trajectories would be considering 1 million flips.
+
+```{r reviewing simulation results- final trajectory}
+kable(
+game_simulation %>%
+  filter(game.number >= 8999992) %>%
+  group_by(flip.simulation) %>%
+  summarise(final.trajectory = trajectory,
+            proximity.to.zero = ifelse(trajectory > 0, "Over Zero", "Under Zero")) %>%
+  arrange(desc(final.trajectory))
+)
+```
+
+Once again though, my intuition about how much of the trajectory would be over zero was inaccurate. Only one of the simulations has a trajectory where there is a reasonably even split above and below zero (two, 54% above and 46% below). I originally thought there might be around 60% above or below the line; 8 out of 9 simulations are outside this split. In fact, there are three runs that have trajectories which stayed above zero for over 95% of the simulation.
+
+```{r reviewing simulation results- percentage over/under zero}
+kable(
+  game_simulation %>%
+  filter(trajectory > 0) %>%
+  group_by(flip.simulation) %>%
+  count() %>%
+  summarise(trajectory.over.zero.percent = n / 1000000 * 100,
+            under.zero.percent = 100 - trajectory.over.zero.percent) %>%
+  arrange(desc(trajectory.over.zero.percent))
+)
+```
+
+The plot below highlights each simulation trajectory. What's interesting is that every simulation ends with in 2000 of zero but, many of them still stay either above or below zero for most of the simulation. Simulation four essentially does not cross zero, outside of the first few flips. The lines do not bisect zero as much as I would have thought, nor was my intuition on how much time the trajectory spends above or below zero well calibrated. Given this, the observations matched my expectations well enough for the amount of heads over zero but, were way off in terms of trajectory percent.
+
+```{r simulation visualization, cache=TRUE, fig.width=11}
+game_simulation %>%
+  ggplot(aes(game.number, trajectory, colour = flip.simulation)) +
+  geom_line() +
+  facet_wrap(facets = "flip.simulation") +
+  geom_hline(yintercept = 0, colour = "red") +
+  theme(legend.position = "none") +
+  labs(title = "Nine simulations of 1 million coin flips alongside expected pay out (1 head = 1$ & 1 tail = -1$)",
+       subtitle = "All runs have differing trajectories and none end up at exactly zero (seven over, two below) -- All are within $2,000 of zero though")
+```
+
+###2.2. Multiple trajectories
+
+####What do you expect the probabilities of the following events to be?
+
+- Probability of difference between heads and tails is less than 5 with 500 flips?
+
+I would expect this to be fairly high given this area would be in the largest portion of the distribution (between an upper and lower bound of 255 and 245 given mean 250, or even heads and tails). This assumes the distributions are approximately normal. As such, I will assume around 30% probability of getting less than a difference of 5 with 500 flips.
+
+- Probability of difference between heads and tails is greater than 25 with 500 flips?
+
+I would expect this to be low given this area comprises the two tails of the distribution  above 275 and below 225 (given mean 250, or even heads and tails). This assumes the distributions are approximately normal. As such, I will assume around 10% probability of getting greater than a difference of 25 with 500 flips.
+
+```{r 2000 random walks with 500 flips}
+Trajectory2000 <- t(apply(matrix(Flips, ncol = 500), 1, cumsum))
+
+random_walks <- data.frame(
+  flip.simulation = 1:2000,
+  trajectory = Trajectory2000[,500]
+)
+```
+
+My intuition was slightly off here given there were 18% of walks with a difference of less than 5.
+
+```{r random walk results- less than 5 table}
+random_walks %>%
+  filter(trajectory > -5 & trajectory < 5) %>%
+  count() %>%
+  summarise(less.than.five = n / 2000 * 100)
+```
+
+The histogram shows my normal distribution assumption was incorrect, which might explain an amount of the difference. However, it's generally just less than I was expecting.
+
+```{r random walk results- less than 5 histogram, message=FALSE}
+random_walks %>%
+  ggplot(aes(trajectory)) +
+  geom_histogram(fill = "lightgray") +
+  geom_vline(xintercept = -5, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  geom_vline(xintercept = 5, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  scale_x_continuous(breaks = seq(-100, 100, 10)) +
+labs(title = "Portion of random walks between 5 and -5 is 18% (2000 simulations with 500 flips each)")
+```
+
+My intuition was very off for the second estimation given there were 25% of walks with a difference of greater than 25.
+
+```{r random walk results- greater than 25 table}
+random_walks %>%
+  filter(trajectory > 25 | trajectory < -25) %>%
+  count() %>%
+  summarise(less.than.five = n / 2000 * 100)
+```
+
+The histogram shows my normal distribution assumption was incorrect, which might explain an amount of the difference. The tails past 25 on each side are much larger than I anticipated, which means my intuition underestimated the actual differences.
+
+```{r random walk results- greater than 25 histogram, message=FALSE}
+random_walks %>%
+  ggplot(aes(trajectory)) +
+  geom_histogram(fill = "lightgray") +
+  geom_vline(xintercept = -25, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  geom_vline(xintercept = 25, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  scale_x_continuous(breaks = seq(-100, 100, 25)) +
+labs(title = "Portion of random walks greater than 25 or -25 is 25% (2000 simulations with 500 flips each)")
+```
+
+In both cases, because I assumed a normal distirbution my intuition was not especially close. The 5 question was too generous and the 25 question was too conservative. I thought that the 5 would be much higher than 25, when in fact 25 had 25% and 5 had 18% (a difference of 7%).
+
+###2.3. Time on one side
+
+####How long do you expect trajectory of random walk to spend on one side from zero, below or above?
+
+With some previous intuition developed on time above or below zero from the 1 million simulations, I think that the proportion for each walk will be around 50%. Intuitively, with a large sample the average above would be about even. To expand on this, of the 2000 simulations, some should be well above and some well below zero. However, they should even out to around 50% over a large enough sample. The previous example with 1 million flips only included 9 simulations. 9 isn't very many, despite having 9 million total flips. The difference here, as opposed to 1 million flips over 9 simulations, is that the 1 million flips are distributed between 2000 runs, so there is a higher likeliehood they converge to being about 50% above and below zero.
+
+```{r random walks - percentage over/under zero}
+random_walks <- random_walks %>%
+  mutate(trajectory = apply(Trajectory2000, 1, function(z) sum(z>0)),
+         proportion = trajectory / 500 * 100)
+```
+
+It seems my intuition was reasonable here. The mean proportional difference is about 49%. The sample size seems to even out the above and below zero.
+
+```{r random walks - percentage over/under zero review}
+kable(
+  random_walks %>%
+  summarise(random.walk.min = min(proportion),
+            random.walk.max = max(proportion),
+            random.walk.mean = mean(proportion),
+            random.walk.median = median(proportion))
+)
+```
+
+What's interesting though is that despite the mean being more or less even, there are many simulations where the trajectory was well above or well below zero. In fact, the two most frequent proportions are 0 (65) and 100 (36). The other most frequent values are also very close to either 0 or 100. This means that a large number of simulations have trajectories that are either nearly, if not all, above or below zero.
+
+```{r random walks mode}
+kable(
+  random_walks %>%
+  count(proportion, sort = T) %>%
+  filter(n > 12)
+)
+```
+
+While this seems like an unexpected distribution, it conforms to my initial explanation. For the proprtions to even out to 50%, each limit, 0 and 100, have to be reasonably equal and move slowly into the middle. At first glance, this seems counterintuitive with two very populated tails and a dip into the centre of the distribution. But it's more or less an inverse normal distribution. Building on this, since the scale is between 0 and 100, with the expected mean at around 50, the distribution has to balance to this value. For this to work, there has to be heavy tails at 0 and 100.
+
+```{r random walks proportion over/under zero histogram, message=FALSE}
+random_walks %>%
+  ggplot(aes(proportion)) +
+  geom_histogram(fill = "lightgray") +
+  scale_x_continuous(breaks = seq(0, 100, 25)) +
+  geom_vline(xintercept = 49, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  labs(title = "Portion of random walks finishing over 50% (2000 simulations with 500 flips each)",
+       subtitle = "Blue line is mean (49% above zero)")
+```
+
+In this sense, a histogram probably isn't the ideal visualization choice because it doesn't represent this balance well. To counter this, proportion can be transformed to a -50 to 50 scale, given above and below zero, and then plotted. The ordered bar chart, which has been smoothed to convey the area of each trajectory area, better accentuates how both proportions even out after 2000 simulations.
+
+```{r random walks proportion over/under zero ordered bar plot}
+random_walks %>%
+  mutate(proportion = proportion - 50,
+         trajectory.finish = ifelse(proportion > 0, "above.zero", "below.zero"),
+         flip.simulation = as.numeric(reorder(flip.simulation, proportion))) %>%
+  ggplot(aes(flip.simulation, proportion, 
+             fill = trajectory.finish, colour = trajectory.finish)) +
+  geom_col() +
+  geom_hline(yintercept = -1, linetype = "dashed", 
+             colour = "royalblue2", size = 1.5) +
+  labs(title = "Portion of random walks finishing above 50% (2000 simulations with 500 flips each)",
+       subtitle = "Scaled so zero is 50% and increments above are plus and minus; Blue line is mean (-1, or 49% above zero)")
+```
+
+This is the The Law of Large Numbers in action. The law states that as the number of trials in a simulation go up, the results should converge on the expected value (in this case the trajectory or proportion mean). This puts the previous histogram in perfect context.
+
+Thought about a different way, the 2000 simulations should converge to the expected trajectory mean of zero over the long term. This can be verified by plotting each trajectory line and calculating the mean (0.18, or about 0). The line plot below highlights this well. Some simulations are really high or low but, on average, they combine to the expected mean. If the lines are viewed vertically, they look like a histogram for a normal distribution with a mean of zero.
+
+```{r 2000 x 500 simulation visualization, cache=TRUE}
+library(reshape2)
+
+trajectory2000 <- data.frame(t(Trajectory2000))
+
+trajectory2000 <- melt(trajectory2000, variable.name = "flip.simulation") %>%
+  mutate(flip.number = rep(1:500, time = 2000))
+
+trajectory2000 %>%
+  ggplot(aes(flip.number, value, colour = flip.simulation)) +
+  geom_line(size = 1, alpha = .3) +
+  theme(legend.position = "none") +
+  geom_hline(yintercept = 0, colour = "red", size = 1.2) +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) +
+  labs(title = "2000 simulations each with 500 flips alongside expected pay out for run (1 head = 1$ & 1 tail = -1$)",
+       subtitle = "Runs have differing trajectories but mean is about 0; This demonstrates the Law of Large Numbers (as n increases, sample moves towards E[X])",
+       y = "trajectory")
+```
+
+Of interest, the initial simulation with 1 million, and the nine 1 million runs I conducted, both had very large samples but, very small trial numbers. Hence, the observed trajectory variance  was noteworthy. In the nine by one million simulation, the average trajectory proportion was 70%. But this evens out when the number of simulations increases. In this sense, there's a sweet spot where both the number of total simulations and the number of trials in a specific simulation move towards an expected mean. If one is too low, as in the original simulations, there is a large amount of variance. However, this is alleviated when both numbers are sufficiently increased, as with one million divided into 2000 by 500. Without accounting for this, it's easy to be fooled by randomness in the short term. It also helps explain why some of my intuitions, even though seemingly correct, looked wrong after only a small number of simulations.
+
+***
