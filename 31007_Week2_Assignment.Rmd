@@ -547,9 +547,7 @@ Use a seed of your choice `my.seed`.
 set.seed(1017)
 
 nSample <- 25000
-
 xy <- runif(2 * nSample, 0, 100)
-
 xy <- matrix(xy, ncol = 2)
 
 head(xy)
@@ -591,11 +589,40 @@ fast_monte(14000, 1)
 
 ###4.3 Simulate quasi-random poins [x,y] on [0,100] x [0,100]
 
-```{r quasi-random simulation}
+Function `runif()` can be replaced by `sobol()` from library `randtoolbox`.
 
+```{r quasi-random simulation, message=FALSE, warning=FALSE}
+#install.packages("randtoolbox")
+library(randtoolbox)
+
+nSample <- 800
+my.seed <- 1017
+xy <- sobol(nSample, dim = 2,init = T, scrambling = T, seed= my.seed) * 100
+
+ScratchOffMonteCarlo(xy)
+```
+
+####Again, by changing nSample and my.seed try to make the quote of the day readable with minimum sample size. What percent you needed to scratch off to make the quote readable?
+
+With about 77% scratched off, the quote becomes just readable.
+
+```{r sobol monte carlo}
+sobol_monte <- function(sample.n, seed){
+  nSample <- sample.n
+  xy <- sobol(nSample, dim = 2,init = T, scrambling = T, seed= seed) * 100
+  ScratchOffMonteCarlo(xy)
+}
+
+sobol_monte(10500, 1)
 ```
 
 
+####Which of the Monte Carlo methods makes the quote readable sooner?
+
+####Which parameters nSample and my.seed gave you the best result, what percent of the yellow paint were you able to scratch off by each method?
+
+
+####Changing which of the two parameters plays more significant role?
 
 ***
 
