@@ -47,7 +47,7 @@ Turn your sequence of {0,1} into uniform random numbers, [0,1].
 Create function that turns a sequence of zeros and ones of length n into decimal form.
 
 ```{r bits to integer function}
-bitsToInt<-function(x) {
+bitsToInt <- function(x) {
     packBits(rev(c(rep(FALSE, 32-length(x)%%32), as.logical(x))), "integer")
 }
 
@@ -373,14 +373,14 @@ erfc_df <- data.frame(
   erfc.p.value = erfc(abs(apply(matrix(monobit_random, ncol = 50), 1, sum))/sqrt(2 * 50))
 )
 
-
 erfc_df %>%
   mutate(significance.threshold = ifelse(erfc.p.value <= .01, 
                                          "non-random", "random")) %>%
   ggplot(aes(test, erfc.p.value, colour = significance.threshold)) +
   geom_point(size = 3) +
-  geom_hline(yintercept = 0.01, colour = "red", size = 1.3) +
-  scale_color_manual(values = c("#00EE76")) +
+  geom_hline(yintercept = 0.01, colour = "#FF7F00", 
+             size = 1.3, alpha = .3) +
+  scale_color_manual(values = c("royalblue2")) +
   labs(title = "All erfc tests are above p-value threshold, though point 20 is close")
 ```
 
@@ -394,12 +394,219 @@ Conduct the tests described in the previous section.
 
 ###Description of your random number generator
 
+My random number generator focuses on the stock price of banking giant Goldman Sachs. The project aims to assess if the stock variations are governed by randomness. To do so, I obtained a data set with the firm's stock price from 2006 to the end of 2015. Specifically, I chose to focus on the most recent year, 2015, which has 252 entries. The set has prices for open, close, minimum, and maximum, of which I chose to focus on the opening price each day. As such, the anlaysis reviews the opening Goldman price for all of 2015.
+
+Going in, the analysis has a few shortcomings. Notably, the date range is fairly arbitrary having selected a specific year. Without any proper finance background, I also don't have a strong rationale or explanation for picking open over the other prices. That said, the analysis is novel and should be an interesting dive into the variations of financial market data. Any findings are at best perfunctory but, I'm interested in attempting to gauge randmomness in a notoriously random domain.
+
+```{r goldman sachs stock price data 2006-2015 load}
+goldman <- read.csv("GS.csv", stringsAsFactors = F)
+```
 
 ###Generated sequence
 
+The opening prices aren't conveniently scaled for a uniform distribution. As such, I needed to develop a function to scale the price range from its current form to between 0 and 1. As seen below, `scale_range` performs this work and transforms the variable into a form that is useable for the randomness testing. From there, I also pared down the data set to include only 2015 entries for `Open` and `Scaled.open`.  
+
+```{r generating goldman sequence data}
+scale_range <- function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+goldman <- goldman %>%
+  mutate(Date = as.Date(Date),
+         date.range = grepl(pattern = "2015", Date),
+         Scaled.open = scale_range(Open)) %>%
+  filter(date.range == T) %>%
+  select(Date, Open, Scaled.open)
+```
+
+Before diving into the randomness work, I thought I would visualize the price data to get a feel for how it moved throughout 2015. At first glance, the line doesn't look very random as there seems to be patterns in the movement. In contrast, a random set looks more erractic, like a nosiy stereo wave, without any patterned ups and downs. This can be further verified during the next few tests though.
+
+```{r goldman 2015 line plot}
+goldman %>%
+  ggplot(aes(Date, Open)) +
+  geom_line(size = 1.3, colour = "royalblue2") +
+  scale_y_continuous(breaks = seq(170, 220, 5)) +
+  geom_hline(yintercept = mean(goldman$Open), size = 1.3,
+                               colour = "#FF7F00", alpha = .3) +
+  labs(title = "Goldman Sachs opening stock price, Dec. 2015 to Jan. 2016",
+       subtitle = "Mean opening price was 193 (orange line)",
+       x = NULL)
+```
+
 ###Results of the uniformity test
+
+The intial results do not look random. There seems to be a pattern in the sample where price rises and then falls. Compared to the `runif` and Random.org data, both of which were verified using randomness testing, this looks much different.
+
+```{r goldman uniformity test}
+goldman_histogram <- goldman %>%
+  ggplot(aes(Scaled.open, ..density..)) +
+  geom_histogram(fill = "lightgray", boundary = .1, binwidth = .02) +
+  scale_x_continuous(breaks = seq(.5, 1, .02)) +
+  labs(title = "Scaled Goldman Sachs opening stock price, Dec. 2015 to Jan. 2016",
+       subtitle = "Data does not appear to be random- price rises and falls with some pattern")
+
+goldman_histogram
+```
+
+The density breaks can be extracted from the plot and analyzed for variation and range. Here, there is mounting evidence that the data is not random. The density mean is well over one given the range is from 1.59 to 8.33.
+
+```{r histogram statistics for random.org}
+sample_histogram <- data.frame(
+  bin = layer_data(goldman_histogram)$x,
+  counts = layer_data(goldman_histogram)$count,
+  density = layer_data(goldman_histogram)$density
+)
+
+custom_kable(sample_histogram)
+```
+
+The next chunk provides an estimate for the density mean and standard deviation for the goldman histogram. This further solidifies that the data does not appear to be random. the standard deviation (1.92) is well above the theoertical value for a uniform distribution. Further, the upper tail appears to be under one of the bin densities.
+
+```{r histogram density mean and sd for random.org}
+density_stats <- sample_histogram %>%
+  summarise(density.mean = mean(density),
+            density.sd = sd(density),
+            upper.tail = density.mean + 1.96 * density.sd,
+            lower.tail = density.mean - 1.96 * density.sd)
+
+count_stats <- sample_histogram %>%
+  summarise(counts.mean = mean(counts),
+            counts.sd = sd(counts),
+            upper.tail = counts.mean + 1.96 * counts.sd,
+            lower.tail = counts.mean - 1.96 * counts.sd)
+
+kable_left(density_stats)
+```
+
+The plot highlights that all the values are not within the 95% confidence interval for the distribution. This lends further evidence to the claim that the numbers are not randomized.
+
+```{r sample histogram with mean and confidence intervals for random.org}
+sample_histogram %>%
+  ggplot(aes(bin, counts)) +
+  geom_col(fill = "lightgray") +
+  geom_hline(yintercept = count_stats$counts.mean, colour = "#FF7F00", size = 1.3) +
+  geom_hline(yintercept = count_stats$upper.tail, colour = "royalblue2",
+             linetype = "dashed", size = 1.3) +
+  geom_hline(yintercept = count_stats$lower.tail, colour = "royalblue2",
+             linetype = "dashed", size = 1.3) +
+  labs(title = "Plot shows that Scaled.open does not seem to conform to RNG principles- values broach 95% confidence interval",
+       subtitle = "Orange line represents mean (21) and both blue lines are upper and lower confidence bounds (2.07 and 39.93)",
+       x = NULL)
+```
+
+To continue the last part of the uniformity test, the theoertical quantiles of the uniform distirbution can be compared here. Of course, it seems like a foregone conclusion that the sample is not random but, it's important to be thorough and do all the testing. As expected, the results further accentuate that the sample does not appear to be random. Both moments have large differences.
+
+```{r sample moments for random.org}
+kable_left(
+  goldman %>%
+    summarise(first.moment = mean(Scaled.open),
+              theoretical.first = .5,
+              second.moment = var(Scaled.open),
+              theoretical.second = .25)
+)
+```
 
 ###Results of the frequency test
 
+The results so far seem convincingly in favour of the Goldman opening pricebeing non-random. With the Monobit testing, another level of confidence can be added. With a p-value of essentially zero, the null hypothesis is rejected and the alternative hypothesis, that the sample is non-random, is accepted.
+
+```{r monobit testing set-up}
+kable_left(goldman %>%
+  mutate(monobit.goldman = (Scaled.open - .5) * 2) %>%
+  summarise(goldman.erfc = erfc(abs(sum(monobit_goldman)/sqrt(2 * nrow(goldman)))))
+)
+```
+
 ###Results of the turning point test
 
+The testing isn't really in doubt at this point but, the turning point test is included as well. The p-value for the turning test is extremely small, which is exactly in line with the other testing. With the final test, it seems very likely that the sample is not random. The evidence is clear and the opening price for banking stalwart Goldman Sachs appears non-random. All that's left to do is decipher the price movement's non-randomness and the real money will start flowing in.
+
+```{r goldman turning point, message=FALSE, warning=FALSE}
+turning.point.test(goldman$Scaled.open)
+```
+
+***
+
+##4 Monte Carlo Method
+
+###4.1 Scratch off quote of the day: fuction download
+
+```{r loading monte carlo simulation}
+load("ScratchOffMonteCarlo.rda")
+```
+
+###4.2 Simulate pseudo-random poins [x,y] on [0,100] x [0,100]
+
+Select a number of points for `nSample`.
+
+Simulate a sample of length `2*nSample` from uniform distribution on [0,100] and turn it into a (nSample x 2) matrix.
+
+Use a seed of your choice `my.seed`.
+
+```{r monte carlo set up}
+set.seed(1017)
+
+nSample <- 25000
+
+xy <- runif(2 * nSample, 0, 100)
+
+xy <- matrix(xy, ncol = 2)
+
+head(xy)
+```
+
+My first run used 25,000 samples and a seed of 1017; this scratched off 91.45% of the yellow points. This was more than enough to read the message: "The purpose of models is not to fit the data but to sharpen the questions", which was wisely uttered by Samuel Karlin.
+
+```{r monte carlo scratch}
+ScratchOffMonteCarlo(xy)
+```
+
+####By changing nSample and my.seed try to make the quote of the day readable with minimum sample size. What percent you needed to scratch off to make the quote readable?
+
+To do this with some speed, I rolled the sampling and simulation plot function into one and tried a few permutations of sample size and seed. The first combination I tested was a sample size of 1000 with a seed of 1. Only about 9.55% percent was scratched off, which is not enough to even begin to read the message.
+
+```{r custom monte carlo}
+fast_monte <- function(sample.n, seed){
+  set.seed(seed)
+  nSample <- sample.n
+  xy <- runif(2 * nSample, 0, 100)
+  xy <- matrix(xy, ncol = 2)
+  ScratchOffMonteCarlo(xy)
+}
+
+fast_monte(1000, 1)
+```
+
+The second got closer sith a combination of 10,000 and a seed of 1000. As a note, the seeds seems to change the open percentage around the margins (maybe a percent up or down dependent on number) but the sample size drives the major jumps. The message here is still unreadable at 63.41%.
+
+```{r custom monte carlo 2}
+fast_monte(10000, 1000)
+```
+
+With some further testing, it looks like at around 75% open, the message becomes legible. Even at 75.37% open though, it's only just clear enough to read.
+
+```{r custom monte carlo 3}
+fast_monte(14000, 1)
+```
+
+###4.3 Simulate quasi-random poins [x,y] on [0,100] x [0,100]
+
+```{r quasi-random simulation}
+
+```
+
+
+
+***
+
+##References
+
+***
+
+Stock Data: Stock prices of top banks throughout the financial crisis to early 2016
+
+https://www.kaggle.com/rohan8594/stock-data/data
+
+The stock data I used for my random number generator was downloaded from Kaggle. It contains data on Goldman Sachs stock price.
+
+***
