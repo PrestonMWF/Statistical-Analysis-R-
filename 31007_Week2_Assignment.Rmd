@@ -28,17 +28,21 @@ From Random.org you can download binary sequence using library `random`. This li
 
 ```{r installing and loading random package, warning=FALSE}
 #install.packages("random")
-library(random)
+#library(random)
 
 nFlips <- 1000
-random_data <- randomNumbers(n = nFlips, min = 0, max = 1, col = 1,
-                           base = 2, check = TRUE)
+#random_data <- randomNumbers(n = nFlips, min = 0, max = 1, col = 1, base = 2, check = TRUE)
+
+random_data <- read.csv("random_org_data.csv", row.names = NULL)
+
+random_data <- as.vector(random_data$V1)
+
 head(random_data, 10)
 ```
 
 ###1.3 Downloading data from Random.org directly
 
-Since the `random` library worked, I didn't download any additional data from Random.org.
+Since the `random` library worked, I didn't download any additional data from Random.org. However, it didn't process with R markdown so I exported the data and reloaded it. In the end, the sample was derived with the package though.
 
 ###1.4 Turning binary sequence to uniform random numbers
 
@@ -57,7 +61,7 @@ bitsToInt(c(1,1,1,1,1,0))
 Turn the sequence of zeros and ones `dataFromRandom` of length 1000 into a matrix with 10 columns and 100 rows.
 
 ```{r vector into 10 x 100 matrix}
-binary_matrix <- matrix(data = binary_matrix, ncol = 10)
+binary_matrix <- matrix(data = random_data, ncol = 10)
 
 head(binary_matrix)
 ```
@@ -86,37 +90,46 @@ range(decimal_sample)
 
 The goal of the simulation is to highlight how `runif` generates pseudo-random numbers and subsequently, observe their distribution to ensure they conform to RNG principles. Here, it appears that there isn't any identifiable pattern in the histogram and the distribution is generally uniform. 
 
-```{r sample histogram}
+```{r sample histogram, warning=FALSE, message=FALSE}
 library(ggplot2)
 library(dplyr)
+
+theme_set(
+  theme_bw()
+)
 
 sample_df <- as.data.frame(Sample)
 
 sample_histogram <- sample_df %>%
-  mutate(cut = cut(Sample, breaks = 10, labels = c(.1, .2, .3, .4, .5,
-                                                   .6, .7, .8, .9, 1))) %>%
-  count(cut) %>%
-  rename(counts = n) %>%
-  mutate(density = counts / 1000 * 10)
-
-sample_histogram %>%
-  ggplot(aes(cut, counts)) +
-  geom_col() +
+  ggplot(aes(Sample)) +
+  geom_histogram(boundary = .1, binwidth = .1, fill = "lightgray", colour = "gray") +
   scale_y_continuous(breaks = seq(0, 120, 10)) +
+  scale_x_continuous(breaks = seq(0, 1, .1)) +
   labs(title = "Sample of random numbers (length 1000) from runif plot- seems to conform to RNG principles")
+  
+sample_histogram
 ```
 
 There is some variation, as seen by the uneven counts and densities, but generally each break is close. Given this, it seems that the simulation is line with random principles, though some further testing might be revealing.
 
-As a note, I prefer using `dplyr` and `ggplot` so the provided histogram numbers differ slightly from the ones here (due to how the samples get rounded). However, this doesn't change any of the underlying statistics dramatically. 
+As a note, I prefer using `dplyr` and `ggplot` so the provided plotting and analysis will be conducted using these packages instead of base R.
 
-```{r histogram statistics}
+```{r histogram statistics, message=FALSE, warning=FALSE}
+library(knitr)
 library(kableExtra)
 
 custom_kable <- function(x){
   kable(x, format = "html") %>%
   kable_styling(bootstrap_options = "striped")
 }
+
+sample_histogram <- layer_data(sample_histogram)
+
+sample_histogram <- data.frame(
+  bins = sample_histogram$x,
+  counts = sample_histogram$count,
+  density = sample_histogram$density
+)
 
 custom_kable(sample_histogram)
 ```
@@ -129,12 +142,6 @@ density_stats <- sample_histogram %>%
             density.sd = sd(density),
             upper.tail = density.mean + 1.96 * density.sd,
             lower.tail = density.mean - 1.96 * density.sd)
-
-count_stats <- sample_histogram %>%
-  summarise(counts.mean = mean(counts),
-            counts.sd = sd(counts),
-            upper.tail = counts.mean + 1.96 * counts.sd,
-            lower.tail = counts.mean - 1.96 * counts.sd)
 
 kable_left <- function(x){
   kable(x, format = "html") %>%
@@ -149,26 +156,26 @@ kable_left(density_stats)
 The plot highlights that all the values are within the 95% confidence interval for the distribution. This lends further evidence to the claim that the numbers are truly randomized between 0 and 1 because the expectation would be a density of 1 per bin (evenly distributed). The confidence interval captures this by showing that despite some variation, each bin is within the acceptable 95% bounds.
 
 ```{r sample histogram with mean and confidence intervals}
-sample_histogram %>%
-  ggplot(aes(cut, counts)) +
-  geom_col(fill = "lightgray") +
-  scale_y_continuous(breaks = seq(0, 120, 10)) +
-  geom_hline(yintercept = count_stats$counts.mean, colour = "#FF7F00", size = 1.3) +
-  geom_hline(yintercept = count_stats$upper.tail, colour = "royalblue2",
+sample_df %>%
+  ggplot(aes(Sample, ..density..)) +
+  geom_histogram(boundary = .1, binwidth = .1, fill = "lightgray", colour = "gray") +
+  scale_x_continuous(breaks = seq(0 , 1, .1)) +
+  geom_hline(yintercept = density_stats$density.mean, colour = "#FF7F00", size = 1.3) +
+  geom_hline(yintercept = density_stats$upper.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
-  geom_hline(yintercept = count_stats$lower.tail, colour = "royalblue2",
+  geom_hline(yintercept = density_stats$lower.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
   labs(title = "Plot shows that variables seem to conform to RNG principles- All values with in 95% confidence interval",
-       subtitle = "Orange line represents mean (100) and both blue lines are upper and lower confidence bounds (118 and 82.3)",
+       subtitle = "Orange line represents mean (1) and both blue lines are upper and lower confidence bounds (1.17 and .83)",
        caption = "Data: 1000 random numbers generated using runif",
        x = NULL)
 ```
 
 ####What do you conclude about the estimated distribution from the moments?
 
-A uniform distribution of random numbers between 0 and 1 should have theoretical values of .5 and .25 for moment one (expected mean) and moment two (expected variance). These are good starting points for comparing to the actual moments here because they allow a pure theoretical comparison to the sampled random numbers from `runif`. If the numbers are similiar, there is further evidence that the RNG simulates values correctly.
+A uniform distribution of random numbers between 0 and 1 should have theoretical values of .5 and .25 for moment one (expected mean) and moment two (expected variance). These are good starting points for comparing to the actual moments here because they allow a pure theoretical comparison to the sampled random numbers from `runif`. If the numbers are similar, there is further evidence that the RNG simulates values correctly.
 
-As seen, the actual compares well to the theoretical moments. The expected means are very close (about .016 difference) and the expected variance is close as well, though with a slightly larger difference (about .166). This variance was visiable in the random number plots given the bars for each break were not perfectly equal. As such, the larger deviation from the theoertical value here is not overly surprising. Overall though, all of this lends credibility to the RNG since the actual moments align well with the theoretical values.  
+As seen, the actual compares well to the theoretical moments. The expected means are very close (about .016 difference) and the expected variance is close as well, though with a slightly larger difference (about .166). This variance was visible in the random number plots given the bars for each break were not perfectly equal. As such, the larger deviation from the theoretical value here is not overly surprising. Overall though, all of this lends credibility to the RNG since the actual moments align well with the theoretical values.  
 
 ```{r sample moments}
 kable_left(
@@ -196,7 +203,7 @@ sample_stats <- sample_df %>%
 kable_left(sample_stats)
 ```
 
-These estimation principles can be seen on display in a scatter plot below. The mean and quantiles are very close to the theoertical values. Another interesting feature with the grid here is seeing how each square has a reasonably similiar number of points in it but, without any discernable pattern.
+These estimation principles can be seen on display in a scatter plot below. The mean and quantiles are very close to the theoretical values. Another interesting feature with the grid here is seeing how each square has a reasonably similar number of points in it but, without any discernible pattern.
 
 ```{r random number scatterplot}
 sample_df %>%
@@ -216,34 +223,38 @@ sample_df %>%
 
 ####2.1.2 Repeat the same steps to test uniformity of the sample from Random.org
 
-Below is the same treatment for the Random.org decimal sample. As with before, the goal is to assess if the Random.org data sample is correctly generating pseudo-random numbers by bserving their distribution to ensure they conform to RNG principles. 
+Below is the same treatment for the Random.org decimal sample. As with before, the goal is to assess if the Random.org data sample is correctly generating pseudo-random numbers by observing their distribution to ensure they conform to RNG principles. 
 
-The sample has more variation than the `runif` values but, this isn't too surprising since it's a smaller sample size. There doesn't appear to be any identifiable pattern in the histogram but, there is some wide variaition so some more testing wil help determine if it meets the uniform distribution standards.
+The sample has more variation than the `runif` values but, this isn't too surprising since it's a smaller sample size. There doesn't appear to be any identifiable pattern in the histogram but, there is some wide variation so some more testing will help determine if it meets the uniform distribution standards.
 
 ```{r sample histogram for random.org}
 random_df <- data.frame(Sample = decimal_sample)
 
 sample_histogram <- random_df %>%
-  mutate(cut = cut(Sample, breaks = 10, labels = c(.1, .2, .3, .4, .5,
-                                                   .6, .7, .8, .9, 1))) %>%
-  count(cut) %>%
-  rename(counts = n) %>%
-  mutate(density = counts / 1000 * 100)
-
-sample_histogram %>%
-  ggplot(aes(cut, counts)) +
-  geom_col() +
-  scale_y_continuous(breaks = seq(0, 120, 10)) +
-  labs(title = "Sample of random numbers (length 100) from random.org plot")
+  ggplot(aes(Sample)) +
+  geom_histogram(boundary = .1, binwidth = .1, fill = "lightgray", colour = "gray") +
+  scale_y_continuous(breaks = seq(0, 16, 2)) +
+  scale_x_continuous(breaks = seq(0, 1, .1)) +
+  labs(title = "Sample of random numbers (length 100) from Random.org plot")
+  
+sample_histogram
 ```
 
 There is some variation, as seen by the uneven counts and densities, and each break is variable ranging from .3 to 1.8. At a glance though, the density looks like it has an even mean (1).
 
 ```{r histogram statistics for random.org}
+sample_histogram <- layer_data(sample_histogram)
+
+sample_histogram <- data.frame(
+  bins = sample_histogram$x,
+  counts = sample_histogram$count,
+  density = sample_histogram$density
+)
+
 custom_kable(sample_histogram)
 ```
 
-The next chunk provides an estimate for the density mean and standard deviation for the histogram. My intuition looks good here as the mean is indeed 1. Not surprisingly, there is a much larger standard deviaiton here when compared to the `runif` sample.
+The next chunk provides an estimate for the density mean and standard deviation for the histogram. My intuition looks good here as the mean is indeed 1. Not surprisingly, there is a much larger standard deviation here when compared to the `runif` sample.
 
 ```{r histogram density mean and sd for random.org}
 density_stats <- sample_histogram %>%
@@ -251,12 +262,6 @@ density_stats <- sample_histogram %>%
             density.sd = sd(density),
             upper.tail = density.mean + 1.96 * density.sd,
             lower.tail = density.mean - 1.96 * density.sd)
-
-count_stats <- sample_histogram %>%
-  summarise(counts.mean = mean(counts),
-            counts.sd = sd(counts),
-            upper.tail = counts.mean + 1.96 * counts.sd,
-            lower.tail = counts.mean - 1.96 * counts.sd)
 
 kable_left(density_stats)
 ```
@@ -266,24 +271,24 @@ kable_left(density_stats)
 The plot highlights that all the values are within the 95% confidence interval for the distribution. This lends further evidence to the claim that the numbers are truly randomized between 0 and 1 because the expectation would be a density of 1 per bin (evenly distributed). The confidence interval captures this by showing that despite some variation, each bin is within the acceptable 95% bounds.
 
 ```{r sample histogram with mean and confidence intervals for random.org}
-sample_histogram %>%
-  ggplot(aes(cut, counts)) +
-  geom_col(fill = "lightgray") +
-  scale_y_continuous(breaks = seq(0, 120, 10)) +
-  geom_hline(yintercept = count_stats$counts.mean, colour = "#FF7F00", size = 1.3) +
-  geom_hline(yintercept = count_stats$upper.tail, colour = "royalblue2",
+random_df %>%
+  ggplot(aes(Sample, ..density..)) +
+  geom_histogram(boundary = .1, binwidth = .1, fill = "lightgray", colour = "gray") +
+  scale_x_continuous(breaks = seq(0, 1, .1)) +
+  geom_hline(yintercept = density_stats$density.mean, colour = "#FF7F00", size = 1.3) +
+  geom_hline(yintercept = density_stats$upper.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
-  geom_hline(yintercept = count_stats$lower.tail, colour = "royalblue2",
+  geom_hline(yintercept = density_stats$lower.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
   labs(title = "Plot shows that variables seem to conform to RNG principles- All values with in 95% confidence interval",
-       subtitle = "Orange line represents mean (10) and both blue lines are upper and lower confidence bounds (1.28 and 18.7)",
+       subtitle = "Orange line represents mean (1) and both blue lines are upper and lower confidence bounds (1.53 and .47)",
        caption = "Data: 100 random numbers from Random.org converted to 0-1 range",
        x = NULL)
 ```
 
 ####What do you conclude about the estimated distribution from the moments?
 
-As seen, the actual compares well to the theoretical moments. The expected means close (about .05 difference) and the expected variance is close as well, though with a slightly larger difference (about .167). This variance was visible in the random number plots given the bars for each break were not perfectly equal. As such, the larger deviation from the theoertical value here is not overly surprising. Overall though, all of this lends credibility to the Random.org numbers since the actual moments align well with the theoretical values.  
+As seen, the actual compares well to the theoretical moments. The expected means close (about .05 difference) and the expected variance is close as well, though with a slightly larger difference (about .167). This variance was visible in the random number plots given the bars for each break were not perfectly equal. As such, the larger deviation from the theoretical value here is not overly surprising. Overall though, all of this lends credibility to the Random.org numbers since the actual moments align well with the theoretical values.  
 
 ```{r sample moments for random.org}
 kable_left(
@@ -381,7 +386,7 @@ erfc_df %>%
   geom_hline(yintercept = 0.01, colour = "#FF7F00", 
              size = 1.3, alpha = .3) +
   scale_color_manual(values = c("royalblue2")) +
-  labs(title = "All erfc tests are above p-value threshold, though point 20 is close")
+  labs(title = "All erfc tests are above p-value threshold (orange line)")
 ```
 
 ***
@@ -394,9 +399,9 @@ Conduct the tests described in the previous section.
 
 ###Description of your random number generator
 
-My random number generator focuses on the stock price of banking giant Goldman Sachs. The project aims to assess if the stock variations are governed by randomness. To do so, I obtained a data set with the firm's stock price from 2006 to the end of 2015. Specifically, I chose to focus on the most recent year, 2015, which has 252 entries. The set has prices for open, close, minimum, and maximum, of which I chose to focus on the opening price each day. As such, the anlaysis reviews the opening Goldman price for all of 2015.
+My random number generator focuses on the stock price of banking giant Goldman Sachs. The project aims to assess if the stock variations are governed by randomness. To do so, I obtained a data set with the firm's stock price from 2006 to the end of 2015. Specifically, I chose to focus on the most recent year, 2015, which has 252 entries. The set has prices for open, close, minimum, and maximum, of which I chose to focus on the opening price each day. As such, the analysis reviews the opening Goldman price for all of 2015.
 
-Going in, the analysis has a few shortcomings. Notably, the date range is fairly arbitrary having selected a specific year. Without any proper finance background, I also don't have a strong rationale or explanation for picking open over the other prices. That said, the analysis is novel and should be an interesting dive into the variations of financial market data. Any findings are at best perfunctory but, I'm interested in attempting to gauge randmomness in a notoriously random domain.
+Going in, the analysis has a few shortcomings. Notably, the date range is fairly arbitrary having selected a specific year. Without any proper finance background, I also don't have a strong rationale or explanation for picking open over the other prices. That said, the analysis is novel and should be an interesting dive into the variations of financial market data. Any findings are at best perfunctory but, I'm interested in attempting to gauge randomness in a notoriously random domain.
 
 ```{r goldman sachs stock price data 2006-2015 load}
 goldman <- read.csv("GS.csv", stringsAsFactors = F)
@@ -404,7 +409,7 @@ goldman <- read.csv("GS.csv", stringsAsFactors = F)
 
 ###Generated sequence
 
-The opening prices aren't conveniently scaled for a uniform distribution. As such, I needed to develop a function to scale the price range from its current form to between 0 and 1. As seen below, `scale_range` performs this work and transforms the variable into a form that is useable for the randomness testing. From there, I also pared down the data set to include only 2015 entries for `Open` and `Scaled.open`.  
+The opening prices aren't conveniently scaled for a uniform distribution. As such, I needed to develop a function to scale the price range from its current form to between 0 and 1. As seen below, `scale_range` performs this work and transforms the variable into a form that is usable for the randomness testing. From there, I also pared down the data set to include only 2015 entries for `Open` and `Scaled.Open`.  
 
 ```{r generating goldman sequence data}
 scale_range <- function(x){
@@ -414,12 +419,12 @@ scale_range <- function(x){
 goldman <- goldman %>%
   mutate(Date = as.Date(Date),
          date.range = grepl(pattern = "2015", Date),
-         Scaled.open = scale_range(Open)) %>%
+         Scaled.Open = scale_range(Open)) %>%
   filter(date.range == T) %>%
-  select(Date, Open, Scaled.open)
+  select(Date, Open, Scaled.Open)
 ```
 
-Before diving into the randomness work, I thought I would visualize the price data to get a feel for how it moved throughout 2015. At first glance, the line doesn't look very random as there seems to be patterns in the movement. In contrast, a random set looks more erractic, like a nosiy stereo wave, without any patterned ups and downs. This can be further verified during the next few tests though.
+Before diving into the randomness work, I thought I would visualize the price data to get a feel for how it moved throughout 2015. At first glance, the line doesn't look very random as there seems to be patterns in the movement. In contrast, a random set looks more erratic, like a noisy stereo wave, without any patterned ups and downs. This can be further verified during the next few tests though.
 
 ```{r goldman 2015 line plot}
 goldman %>%
@@ -435,12 +440,12 @@ goldman %>%
 
 ###Results of the uniformity test
 
-The intial results do not look random. There seems to be a pattern in the sample where price rises and then falls. Compared to the `runif` and Random.org data, both of which were verified using randomness testing, this looks much different.
+The initial results do not look random. There seems to be a pattern in the sample where price rises and then falls. Compared to the `runif` and Random.org data, both of which were verified using randomness testing, this looks much different.
 
 ```{r goldman uniformity test}
 goldman_histogram <- goldman %>%
-  ggplot(aes(Scaled.open, ..density..)) +
-  geom_histogram(fill = "lightgray", boundary = .1, binwidth = .02) +
+  ggplot(aes(Scaled.Open, ..density..)) +
+  geom_histogram(fill = "lightgray", colour = "gray", boundary = .1, binwidth = .02) +
   scale_x_continuous(breaks = seq(.5, 1, .02)) +
   labs(title = "Scaled Goldman Sachs opening stock price, Dec. 2015 to Jan. 2016",
        subtitle = "Data does not appear to be random- price rises and falls with some pattern")
@@ -450,9 +455,9 @@ goldman_histogram
 
 The density breaks can be extracted from the plot and analyzed for variation and range. Here, there is mounting evidence that the data is not random. The density mean is well over one given the range is from 1.59 to 8.33.
 
-```{r histogram statistics for random.org}
+```{r histogram statistics for goldman}
 sample_histogram <- data.frame(
-  bin = layer_data(goldman_histogram)$x,
+  bins = layer_data(goldman_histogram)$x,
   counts = layer_data(goldman_histogram)$count,
   density = layer_data(goldman_histogram)$density
 )
@@ -460,69 +465,64 @@ sample_histogram <- data.frame(
 custom_kable(sample_histogram)
 ```
 
-The next chunk provides an estimate for the density mean and standard deviation for the goldman histogram. This further solidifies that the data does not appear to be random. the standard deviation (1.92) is well above the theoertical value for a uniform distribution. Further, the upper tail appears to be under one of the bin densities.
+The next chunk provides an estimate for the density mean and standard deviation for the Goldman histogram. This further solidifies that the data does not appear to be random. the standard deviation (1.92) is well above the theoretical value for a uniform distribution. Further, the upper tail appears to be under one of the bin densities.
 
-```{r histogram density mean and sd for random.org}
+```{r histogram density mean and sd for goldman}
 density_stats <- sample_histogram %>%
   summarise(density.mean = mean(density),
             density.sd = sd(density),
             upper.tail = density.mean + 1.96 * density.sd,
             lower.tail = density.mean - 1.96 * density.sd)
 
-count_stats <- sample_histogram %>%
-  summarise(counts.mean = mean(counts),
-            counts.sd = sd(counts),
-            upper.tail = counts.mean + 1.96 * counts.sd,
-            lower.tail = counts.mean - 1.96 * counts.sd)
-
 kable_left(density_stats)
 ```
 
 The plot highlights that all the values are not within the 95% confidence interval for the distribution. This lends further evidence to the claim that the numbers are not randomized.
 
-```{r sample histogram with mean and confidence intervals for random.org}
-sample_histogram %>%
-  ggplot(aes(bin, counts)) +
-  geom_col(fill = "lightgray") +
-  geom_hline(yintercept = count_stats$counts.mean, colour = "#FF7F00", size = 1.3) +
-  geom_hline(yintercept = count_stats$upper.tail, colour = "royalblue2",
+```{r sample histogram with mean and confidence intervals for goldman, fig.width=10}
+goldman %>%
+  ggplot(aes(Scaled.Open, ..density..)) +
+  geom_histogram(fill = "lightgray", colour = "gray", boundary = .1, binwidth = .02) +
+  scale_x_continuous(breaks = seq(.63, .85, .02)) +
+  geom_hline(yintercept = density_stats$density.mean, colour = "#FF7F00", size = 1.3) +
+  geom_hline(yintercept = density_stats$upper.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
-  geom_hline(yintercept = count_stats$lower.tail, colour = "royalblue2",
+  geom_hline(yintercept = density_stats$lower.tail, colour = "royalblue2",
              linetype = "dashed", size = 1.3) +
-  labs(title = "Plot shows that Scaled.open does not seem to conform to RNG principles- values broach 95% confidence interval",
-       subtitle = "Orange line represents mean (21) and both blue lines are upper and lower confidence bounds (2.07 and 39.93)",
+  labs(title = "Plot shows that Scaled.Open does not seem to conform to RNG principles- values broach 95% confidence interval",
+       subtitle = "Orange line represents mean (4.17) and both blue lines are upper and lower confidence bounds (7.92 and .41)",
        x = NULL)
 ```
 
-To continue the last part of the uniformity test, the theoertical quantiles of the uniform distirbution can be compared here. Of course, it seems like a foregone conclusion that the sample is not random but, it's important to be thorough and do all the testing. As expected, the results further accentuate that the sample does not appear to be random. Both moments have large differences.
+To continue the last part of the uniformity test, the theoretical quantiles of the uniform distribution can be compared here. Of course, it seems like a foregone conclusion that the sample is not random but, it's important to be thorough and do all the testing. As expected, the results further accentuate that the sample does not appear to be random. Both moments have large differences.
 
-```{r sample moments for random.org}
+```{r sample moments for goldman}
 kable_left(
   goldman %>%
-    summarise(first.moment = mean(Scaled.open),
+    summarise(first.moment = mean(Scaled.Open),
               theoretical.first = .5,
-              second.moment = var(Scaled.open),
+              second.moment = var(Scaled.Open),
               theoretical.second = .25)
 )
 ```
 
 ###Results of the frequency test
 
-The results so far seem convincingly in favour of the Goldman opening pricebeing non-random. With the Monobit testing, another level of confidence can be added. With a p-value of essentially zero, the null hypothesis is rejected and the alternative hypothesis, that the sample is non-random, is accepted.
+The results so far seem convincingly in favour of the Goldman opening price being non-random. With the Monobit testing, another level of confidence can be added. With a p-value of essentially zero, the null hypothesis is rejected and the alternative hypothesis, that the sample is non-random, is accepted.
 
-```{r monobit testing set-up}
+```{r goldman monobit testing set-up}
 kable_left(goldman %>%
-  mutate(monobit.goldman = (Scaled.open - .5) * 2) %>%
-  summarise(goldman.erfc = erfc(abs(sum(monobit_goldman)/sqrt(2 * nrow(goldman)))))
+  mutate(monobit.goldman = (Scaled.Open - .5) * 2) %>%
+  summarise(goldman.erfc = erfc(abs(sum(monobit.goldman)/sqrt(2 * nrow(goldman)))))
 )
 ```
 
 ###Results of the turning point test
 
-The testing isn't really in doubt at this point but, the turning point test is included as well. The p-value for the turning test is extremely small, which is exactly in line with the other testing. With the final test, it seems very likely that the sample is not random. The evidence is clear and the opening price for banking stalwart Goldman Sachs appears non-random. All that's left to do is decipher the price movement's non-randomness and the real money will start flowing in.
+The randomness isn't really in doubt at this point but, the turning point test is included as well. The p-value for the turning test is extremely small, which is exactly in line with the other testing. With the final test, it seems very likely that the sample is not random. The evidence is clear and the opening price for banking stalwart Goldman Sachs appears non-random. All that's left to do is decipher the price movement's non-randomness and the real money will start flowing in.
 
 ```{r goldman turning point, message=FALSE, warning=FALSE}
-turning.point.test(goldman$Scaled.open)
+turning.point.test(goldman$Scaled.Open)
 ```
 
 ***
@@ -555,7 +555,7 @@ head(xy)
 
 My first run used 25,000 samples and a seed of 1017; this scratched off 91.45% of the yellow points. This was more than enough to read the message: "The purpose of models is not to fit the data but to sharpen the questions", which was wisely uttered by Samuel Karlin.
 
-```{r monte carlo scratch}
+```{r monte carlo scratch, cache=TRUE}
 ScratchOffMonteCarlo(xy)
 ```
 
@@ -563,8 +563,8 @@ ScratchOffMonteCarlo(xy)
 
 To do this with some speed, I rolled the sampling and simulation plot function into one and tried a few permutations of sample size and seed. The first combination I tested was a sample size of 1000 with a seed of 1. Only about 9.55% percent was scratched off, which is not enough to even begin to read the message.
 
-```{r custom monte carlo}
-fast_monte <- function(sample.n, seed){
+```{r custom monte carlo, cache=TRUE}
+full_monte <- function(sample.n, seed){
   set.seed(seed)
   nSample <- sample.n
   xy <- runif(2 * nSample, 0, 100)
@@ -572,26 +572,26 @@ fast_monte <- function(sample.n, seed){
   ScratchOffMonteCarlo(xy)
 }
 
-fast_monte(1000, 1)
+full_monte(1000, 1)
 ```
 
-The second got closer sith a combination of 10,000 and a seed of 1000. As a note, the seeds seems to change the open percentage around the margins (maybe a percent up or down dependent on number) but the sample size drives the major jumps. The message here is still unreadable at 63.41%.
+The second got closer with a combination of 10,000 and a seed of 1000. As a note, the seeds seems to change the open percentage around the margins (maybe a percent up or down dependent on number) but the sample size drives the major jumps. The message here is still unreadable at 63.41%.
 
-```{r custom monte carlo 2}
-fast_monte(10000, 1000)
+```{r custom monte carlo 2, cache=TRUE}
+full_monte(10000, 1000)
 ```
 
 With some further testing, it looks like at around 75% open, the message becomes legible. Even at 75.37% open though, it's only just clear enough to read.
 
-```{r custom monte carlo 3}
-fast_monte(14000, 1)
+```{r custom monte carlo 3, cache=TRUE}
+full_monte(14000, 1)
 ```
 
 ###4.3 Simulate quasi-random poins [x,y] on [0,100] x [0,100]
 
 Function `runif()` can be replaced by `sobol()` from library `randtoolbox`.
 
-```{r quasi-random simulation, message=FALSE, warning=FALSE}
+```{r quasi-random simulation, message=FALSE, warning=FALSE, cache=TRUE}
 #install.packages("randtoolbox")
 library(randtoolbox)
 
@@ -606,23 +606,40 @@ ScratchOffMonteCarlo(xy)
 
 With about 77% scratched off, the quote becomes just readable.
 
-```{r sobol monte carlo}
+```{r sobol monte carlo, cache=TRUE}
 sobol_monte <- function(sample.n, seed){
   nSample <- sample.n
-  xy <- sobol(nSample, dim = 2,init = T, scrambling = T, seed= seed) * 100
+  xy <- sobol(nSample, dim = 2, init = T, scrambling = T, seed = seed) * 100
   ScratchOffMonteCarlo(xy)
 }
 
 sobol_monte(10500, 1)
 ```
 
-
 ####Which of the Monte Carlo methods makes the quote readable sooner?
+
+The quasi-random `sobol` approach works faster to make the quote readable. With a sample of 10,500, the method had an open percentage of about 77%. Compare this to the `runif`, which at about 75% required a sample size of 14,000. As such, it seems that the quasi-random variables help speed up the opening exercise. The implication here is that the quasi-random drops in more "pattern" and therefore exposes more of the message sooner.
 
 ####Which parameters nSample and my.seed gave you the best result, what percent of the yellow paint were you able to scratch off by each method?
 
+I've interpreted best here to mean which method gets to 100% open fastest. Comparing both, it's very clear that the `sobol` version reaches 100% open much faster (sample size = 31,900). The `runif` version (sample size = 88,00) took an extra 56,100 samples to reach the same full open level. This further reinforces the previous commentary on which method reaches readability faster. 
+
+
+```{r most efficent sobol- lowest sample size to get to 100, message=FALSE}
+#reloaded because R markdown gave sobol missing error and would not render
+library(randtoolbox)
+
+sobol_monte(31900, 1)
+```
+
+
+```{r most efficent monte- lowest sample size to get to 100}
+full_monte(88000, 1)
+```
 
 ####Changing which of the two parameters plays more significant role?
+
+Changing the sample size yields the largest increases in open percentage. The seed changes help increase the percentage nominal amounts. For example, if you make the seed very large, say 10 numbers, the open percentage is only slightly affected whereas the same number in sample size would completely open the quote.
 
 ***
 
@@ -630,7 +647,7 @@ sobol_monte(10500, 1)
 
 ***
 
-Stock Data: Stock prices of top banks throughout the financial crisis to early 2016
+####Stock Data: Stock prices of top banks throughout the financial crisis to early 2016
 
 https://www.kaggle.com/rohan8594/stock-data/data
 
