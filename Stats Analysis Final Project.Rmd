@@ -1,0 +1,1907 @@
+---
+title: "MScA, Statistical Analysis (31007)- Final Project"
+author: "Mark Preston"
+date: "June 10, 2018"
+output:
+  html_document:
+    fig_height: 7
+    fig_width: 10
+  word_document: default
+---
+
+***
+
+##Part 1: Loading and reviewing data
+
+Beginning the analysis, I've loaded the project data and relevant R packages. Additionally, I developed a custom function, `custom_kable`, that is useful for constructing aesthetically pleasing charts. Further, I also set my `ggplot2` theme to bw, which is my preference. With that done, I have all the building blocks to begin the project.
+
+```{r loading data and packages, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggfortify)
+library(GGally)
+library(reshape2)
+library(corrplot)
+library(zoo)
+library(rgl)
+library(knitr)
+library(kableExtra)
+
+treasury_data <- read.csv("regression_final_project.csv")
+
+#setting ggplot preference
+theme_set(
+  theme_bw()
+)
+
+#creating custom table function
+custom_kable <- function(x){
+  kable(x, format = "html") %>%
+  kable_styling(bootstrap_options = "striped")
+}
+```
+
+To start, I did a quick review of the data. As in the chart below, there are 11 variables, most of which numeric. These are interest rates for various US Treasury yields to maturity, which range from 3 months to 30 years. The other variables are for dates (i.e. the treasury bond interest rate on that day) in addition to categorical markers indicating if the time period was one where the Fed was easing or tightening monetary policies. Finally, there is an anonymized output variable, which serves as the project's outcome focus. Right now, it's unclear what this variable entails but, the project will work towards.
+
+```{r structural data review}
+data.frame(
+  variable = names(treasury_data),
+  data.type = sapply(treasury_data, typeof),
+  values = sapply(treasury_data, function(x) paste0(head(x),  collapse = ", ")),
+  row.names = NULL) %>%
+  custom_kable()
+```
+
+As another quick data glance, the first 6 rows of each variable can be seen below. This further reinforces that both Easing and Tightening have numerous NA's.
+
+```{r structural data review- first 6 rows}
+head(treasury_data) %>%
+  custom_kable
+```
+
+Following the first data review, I am going to make one transformation. Here, I'm simply changing Date from a factor to a formal date.
+
+```{r data modifications}
+treasury_data <- treasury_data %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%Y"))
+```
+
+Moving into some analysis, I've plotted all the treasury yields from their first to last date. The chart highlights that these yields have steadily declined across all categories since 1981. It's interesting to review the plot and match the lines to historical financial issues, such as the 2008 market crash stemming from the sub-prime mortgage issues. The general cyclical nature of the economy can be seen from the graphic. As a note, there is a gap in the data in 2007 that accounts for the 
+
+```{r plotting all input variables}
+bond_trend <- treasury_data %>%
+  select(-Easing, -Tightening) %>%
+  melt(value.name = "interest.rate", 
+       variable.name = "treasury.yield",
+       id.vars = "Date")
+
+bond_trend %>%
+  filter(treasury.yield != "Output1") %>%
+  ggplot(aes(Date, interest.rate, colour = treasury.yield)) +
+  geom_line(size = 1.3, alpha = .3) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  geom_vline(xintercept = as.Date(c("2007-11-29", "2008-11-11")),
+             colour = "royalblue2", size = 1.3, alpha = .5) +
+  annotate("rect", xmin = as.Date("2007-11-29"), xmax = as.Date("2008-11-11"),
+           ymin = 0, ymax = max(treasury_data$USGG3M), 
+           alpha = .1, fill = "dodgerblue2") +
+  scale_y_continuous(breaks = seq(0, 20, 2)) +
+  labs(title = "Interest rates have declined steadily from 1981 to 2014 in all bond categories",
+       subtitle = "Vertical blue lines from 2007 to 2008 denote a gap in yield rates as a result of missing data",
+       caption = "Source: Course Project Treasury Data")
+```
+
+As an added feature, I've also include a summary table for each decade. I developed the decade feature using Date and then grouped it using the melted data frame from the plot above. Using this, the aggregate trend for each decade can be seen. I've included a range of statistics here but, the table is sorted by yield mean. As gleaned from the chart, these yield rates have steadily declined since the 1980s. Interestingly, the 1980s also had the largest range from about 17 to 5; this spread can be further seen given the decade has the highest standard deviation. The aforementioned 2008 financial crisis is evident again where the yields dropped slightly under zero on some dates.
+
+```{r decade yield review- inputs}
+bond_trend %>%
+  mutate(decade.marker = substr(as.character(Date), 1, 3),
+         decade = case_when(
+           decade.marker == "198" ~ "1980s",
+           decade.marker == "199" ~ "1990s",
+           decade.marker == "200" ~ "2000s",
+           decade.marker == "201" ~ "2010s")) %>%
+  filter(treasury.yield != "Output1") %>%
+  group_by(decade) %>%
+  summarise(yield.mean = mean(interest.rate),
+            yield.median = median(interest.rate),
+            yield.sd = sd(interest.rate),
+            yield.min = min(interest.rate),
+            yield.max = max(interest.rate)) %>%
+  arrange(desc(yield.mean)) %>%
+  custom_kable()
+```
+
+The plots can also be viewed using facets, which makes each yield period clearer.
+
+```{r facet plot for input variables}
+bond_trend %>%
+  filter(treasury.yield != "Output1") %>%
+  ggplot(aes(Date, interest.rate, colour = treasury.yield)) +
+  geom_line(size = 1.3) +
+  facet_wrap(facets = "treasury.yield", nrow = 2) +
+  theme(legend.position = "none") +
+  labs(title = "Interest rates have declined steadily from 1981 to 2014 in all bond categories",
+       caption = "Source: Course Project Treasury Data")
+```
+
+So far, the plots have only included the treasury interest rates for various bond types. However, the yet unknown outcome variable hasn't been included alongside. To see how the predictor variables interact with the output, the plot below includes all trajectories. As seen, the outcome variable has been more erratic than the predictors. Despite this, at first glance it generally seems highly correlated with the input variables despite some scale differences. Of note, the variable drops well below zero on many dates, including most of the 2000s and all of the 2010s.
+
+```{r all variables and output included}
+bond_trend %>%
+  ggplot(aes(Date, interest.rate, colour = treasury.yield)) +
+  geom_line(size = 1.3, alpha = .4) +
+  scale_y_continuous(breaks = seq(-20, 30, 5)) +
+  geom_hline(yintercept = 0, colour = "royalblue2", size = 1.3, alpha = .3) +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  labs(title = "Interest rates have declined steadily from 1981 to 2014 in all bond categories",
+       subtitle = "Output1 has been more volatile than predictors in given timeframe -- variable identity still unknown",
+       caption = "Source: Course Project Treasury Data",
+       y = "interest rate (and unknown output values)")
+```
+
+The table below is similar to the yields for predictors but, the output extremes are evident. The values are much higher than the yields in the 1980s but, drop well below starting in the early 1990s. While the variable remains shrouded in mystery, the plot and table highlight some attributes of how it behaves. Again, despite some scaling variation, the output and inputs seem strongly correlated.
+
+```{r decade yield review- output}
+bond_trend %>%
+  mutate(decade.marker = substr(as.character(Date), 1, 3),
+         decade = case_when(
+           decade.marker == "198" ~ "1980s",
+           decade.marker == "199" ~ "1990s",
+           decade.marker == "200" ~ "2000s",
+           decade.marker == "201" ~ "2010s")) %>%
+  filter(treasury.yield == "Output1") %>%
+  group_by(decade) %>%
+  summarise(output.mean = mean(interest.rate),
+            output.median = median(interest.rate),
+            output.sd = sd(interest.rate),
+            output.min = min(interest.rate),
+            output.max = max(interest.rate)) %>%
+  arrange(desc(output.mean)) %>%
+  custom_kable()
+```
+
+To check the formal relationship between the inputs and output before getting into the linear modelling, I constructed a correlation visualization. As seen, the correlations are extremely high. In fact, they're perfect in some cases, as with USGG2YR to USGG5YR, and almost perfect in the remaining few. This is a strong indication that the output variable might reasonably be some derivation of the inputs. That said, what that might be is still very unclear and there's more work to uncover what the output actually is.
+
+```{r correlation plot, fig.width = 11}
+corplot_df <- treasury_data %>%
+  select(USGG3M, USGG6M, USGG2YR, USGG3YR, USGG5YR, USGG10YR, USGG30YR, Output1) %>%
+  rename(three.m = USGG3M,
+         six.m = USGG6M,
+         two.yr = USGG2YR,
+         three.yr = USGG3YR, 
+         five.yr = USGG5YR,
+         ten.yr = USGG10YR,
+         thirty.yr = USGG30YR,
+         output = Output1)
+
+corplot_df <- cor(corplot_df)
+
+corrplot.mixed(corplot_df,
+               title = "Correlation plot for Treasury Data- Output shows almost perfect correlation to inputs", mar = c(0, 0, 2, 0))
+```
+
+***
+
+##Part 2: Linear modelling
+
+###Estimate simple regression models with each of the input variables and the output variable.
+
+Following the initial exploratory work, I'll being the modelling phase. To begin, I'll be developing seven individual linear models, one for each treasury yield category versus the output.
+
+```{r linear models for all input variables}
+linear3M <- lm(Output1 ~ USGG3M, data = treasury_data)
+
+linear6M <- lm(Output1 ~ USGG6M, data = treasury_data)
+
+linear2YR <- lm(Output1 ~ USGG2YR, data = treasury_data)
+
+linear3YR <- lm(Output1 ~ USGG3YR, data = treasury_data)
+
+linear5YR <- lm(Output1 ~ USGG5YR, data = treasury_data)
+
+linear10YR <- lm(Output1 ~ USGG10YR, data = treasury_data)
+
+linear30YR <- lm(Output1 ~ USGG30YR, data = treasury_data)
+```
+
+
+###Analyze the regession summaries
+
+Starting with the first model, which focuses on the 3-month yield, it's clear that the simple linear regressions should be very significant. There were clear signs this might be the case during the correlation work but, the model summary helps solidify this intuition. Here, the model as a whole has a very significant slope indicating the alternative hypothesis, that there is a relationship between input vs output variable, can be accepted.  
+
+The slope estimate is 2.50756, which suggests that for every one unit increase in the output, the input goes up by that amount. In real terms here, that means for one unit change in output, the bond rate would be expected to go up by about 2.5 points. The -11.72318 intercept is less interesting in any pragmatic sense given interest rates cannot go below zero in the US and the output is unknown. Nonetheless, this indicates that without any interaction, the output level would be at that value. Both the slope and intercept are significant as well. Broadly speaking, these mean that there is a verifiable relationship between the 3-month bond interest rate and the output. Assuming the output is of some significance to a business or government audience, this relationship would be very useful for understanding market trends or possibly forecasting. That said, with the output still unknown, it's hard to draw many conclusions about the wider applicability of the model. Still, there are signs that this might possibly have fruitful applications.
+
+```{r model review- linear 3M}
+summary(linear3M)
+```
+
+To better review this relationship, I've included a scatterplot for the variables. This significant association is on display here with a very strong positive relationship. Further accentuating the association is a regression line. Of note, I've included it with standard error, although there is so little that it isn't visible.
+
+Perhaps more interestingly, the points show an uneven, clustered pattern. This is a clue that the relationship is different depending on the value of each variable. Additionally, this almost guarantees that the residuals stemming from the regression are unequal since points in the top have a different pattern than in the bottom portions. In fact, many sections seem to be very uneven. Again, I feel like this points to a non-traditional "output" and towards one that is in someway linked to the interest rate predictors (if not wholly derived from them).
+
+```{r 3 month bond vs output with regression line}
+treasury_data %>%
+  ggplot(aes(USGG3M, Output1)) +
+  geom_jitter(colour = "darkgray", alpha = .5) +
+  geom_smooth(method = "lm", size = 1.3) +
+  labs(title = "Output1 vs USGG3M interest rate- variables have a very significant relationship",
+       subtitle = "Scatteprlot pattern displays clustered points which are unevenly distributed  ",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Check relevance of the estimated parameters and the model as a whole, including the amount of correlation explained.
+
+The plot raises another point. Given that the models are likely quite homogeneous, owing to similarly high correlations coefficients and plot trends, I decided to review them in unison. This helps highlight model comparisons while centralizing many model coefficients. Additionally, I wanted to try making a few custom functions to capture the various model outputs as well. To this end, I started with collecting all the model variance.
+
+This is a crucial step in the analysis. Collecting and reviewing how much variance a model explains is central to inferential statistics. To do this, there are a few variance related calculations that need to be made. First, I started with total variance. This is captured by taking the variance of Output1. In general terms, this measures how spread out each value from the output variable is from its average value. Using regression, the idea is to explain how much variance can be accounted for by the predictor.
+
+This leads to the second calculation, which is unexplained variance. With a simple regression model, this means the amount of variance that the predictor variable does not explain. To derive this value, I squared the model's sigma, or variance. This removes any negative values and generally normalizes the values. The resulting value is the unexplained variance, which can then be compared against the total variance to assess model fit. If the model explains the output variance well, the unexplained variance should be low. Overall, this is important because it situates how well the model explains the output variable, which is ultimately one of the goals of regression.
+
+To automate this process across all the seven models, I utilized `sapply` to functionally run the models and collect the unexplained variance at once. Further, I captured them in a data frame so they could be presented nicely while also adding in a new variable which is the total percent explained by the model. This is a manual R2, which can be checked for accuracy against the normal model summary to make sure the calculations are correct.
+
+The output of the custom function can be seen below. It shows that all of the models explain a very high amount of the output. The model I started with, the 3-month bond, is on the lower side of variance explained, although that's extremely relative here given an R2 of about .96. The lowest model here is the 30-year bond with an R2 of about .935 while the 3-year bond is highest with an absurd .998 R2. This table really highlights how well each predictor explains the output variable. They lend further credence to the output being some amalgamation of the inputs as well though given some of the models explain all variance in Output1.
+
+```{r custom variance function R2}
+variance_explained <- function(columns){
+  var_df <- data.frame(
+    Model = colnames(treasury_data[,columns]),
+    Total.Variance = var(treasury_data$Output1),
+    Unexplained.Variance = sapply(columns, function(x) summary(lm(Output1 ~ treasury_data[,x], data = treasury_data))$sigma ^ 2))
+  
+  var_df %>%
+  mutate(Percent.Explained.R2 = (Total.Variance - Unexplained.Variance) / Total.Variance * 100) %>% custom_kable()
+}
+
+variance_explained(2:8)
+```
+
+Much like the previous custom function deriving variance explanations for each model, I put together one to review model significance (albeit with `apply`). Through this, I'm checking to see if the overall model slope is significantly different than zero (as would be the null hypothesis). Not surprisingly considering the previous work, all the models are highly significant. In fact, their respective p-values are so small, they register as zero. Alongside the model p-values, I've included the F statistic and degrees of freedom for model and residuals. These are used to derive the p-value in the F test, which I've included in the function using `pf` and the model appropriate components.
+
+```{r custom function for modle significance}
+model_significance <-  function(columns){
+  sig_df <- data.frame(
+    model = colnames(treasury_data[,columns]),
+  t(apply(treasury_data[,columns], 2, function(x) summary(lm(Output1 ~ x, treasury_data))$fstatistic)))
+  
+  sig_df %>%
+    rename(f.statistic = value) %>%
+    mutate(model.p.value = pf(f.statistic, numdf, dendf, lower.tail = F)) %>%
+    custom_kable()
+}
+
+model_significance(2:8)
+```
+
+
+###Collect all slopes and intercepts in one table and print this table. Try to do it in one line using `apply` function.
+
+For my previous functions I've used both `sapply` and `apply`, which will continue here for collecting all the model slopes and intercepts. Per the question though, I've utilized `apply` as part of a larger function to collect and display model coefficients.
+
+Having already covered the slope and intercept for the 3-month bond, all the interpretations here are similar, save for the values themselves. All the models have similar slopes ranging from 2.4 (USGG2YR) to about 3.1 (USGG30YR). This means that for every one unit increase in the output, the expected interest rate would increase by this value. The intercepts vary more widely from -11.72318 (USGG3M) to -21.08590 (USGG30YR). In combination with the other slopes, this means that each line has slightly different angles, despite being so similar.
+
+Again, all the slopes and intercepts are very significant, as seen by zeroes in both columns. These p-values are derived using the T distribution test, hence the inclusion of their respective t-values (all of which are, naturally, very high).
+
+```{r linear model coefficients- output1 ~ inputs}
+input_coefficients <- function(columns){
+  input_df <- data.frame(
+  Model = colnames(treasury_data[,columns]),
+  t(apply(treasury_data[,columns], 2, function(x) summary(lm(Output1 ~ x, treasury_data))$coefficients[c(1, 2, 5, 6, 7, 8)])))
+  
+  rownames(input_df) <- NULL
+  
+  input_df %>%
+    rename(Intercept = X1,
+           Slope = X2,
+           Intercept.t.value = X3,
+           Slope.t.value = X4,
+           Intercept.p.value = X5,
+           Slope.p.value = X6) %>% custom_kable()
+}
+
+(input_coef <- input_coefficients(2:8))
+```
+
+The last measure to review from each model is adjusted R2. While R2 was discussed, it's worth spending time on the adjusted version as well. Adjusted R2 still accounts for how much variance a model explains but, with a slight formula difference. Inherently, adding new predictors explains more variance in a model. However, it might not add any new worthwhile information. To offset adding new but ultimately less useful predictors and inflating R2, adjusted R2 provides a "penalty" and can be lowered as a result. Ideally, the model will be equal on both metrics- if adjusted is lower, it's a sign that there is redundant or less than ideal predictors included. In all the model's here, the adjusted R2 matches the original variance explained numbers. Even though these are one predictor models, seeing them perfectly aligned signals there isn't any excess or redundant information.
+
+```{r linear model R2 values- output1 ~ inputs}
+adj_rsquared <- data.frame(
+  lapply(treasury_data[,2:8], 
+         function(x) summary(lm(Output1 ~ x, data = treasury_data))[9])
+)
+
+names(adj_rsquared) <- names(treasury_data[,2:8])
+
+rownames(adj_rsquared) <- "adj.r.squared"
+
+custom_kable(t(adj_rsquared))
+```
+
+###Plot the output variable together with the fitted values
+
+Before plotting the fitted values, it's worth doing a final review of each linear regression model but, from a visual standpoint. Previously, I plotted USGG3M so I thought it was worthwhile to revisit all the bivariate relationships. As seen, they all have the same uneven distributions. This lends visual confirmation to the .998 R2 for USGG3YR as well- the points are almost wholly covered by the regression line.
+
+```{r output1 vs all bond cateogries}
+bond_trend %>%
+  filter(treasury.yield != "Output1") %>%
+  mutate(Output1 = rep(treasury_data$Output1, 7)) %>%
+  ggplot(aes(interest.rate, Output1)) +
+  geom_jitter(aes(colour = treasury.yield), alpha = .2) +
+  geom_smooth(method = "lm", size = 1.3) +
+  facet_wrap(facets = "treasury.yield", nrow = 2) +
+  theme(legend.position = "none") +
+  labs(title = "Output1 vs all bond category interest rates- all variables have a very significant relationship",
+       subtitle = "Scatteprlot patterns all display clustered points which are unevenly distributed  ",
+       caption = "Source: Course Project Treasury Data")
+```
+
+These scatterplots also portend the fitted values versus the actuals quite well too. As before, I've collected all the fitted values, albeit using `lapply`. These further confirm the very high model fits. Again, USGG3YR displays a nearly perfect fit, though the plots for USGG2YR and USGG5YR show very close fits as well.
+
+These are in line with my expectations following the linear model summary reviews. The highest R2 models seem to have the best fitted values. One slight surprise is the USGG30YR seems to have slightly more erratic fitted values, specifically in the 2000s, when compared to the best performing models. Similarly, the USGG3M, USGG6M, and USGG10YR have periods where they differ from the actual values. However, even in these cases the models still include fitted values that are in close alignment with the original inputs.
+
+```{r model actuals vs fitted, message=FALSE}
+fitted_values <- data.frame(
+  lapply(treasury_data[,2:8], 
+         function(x) lm(x ~ Output1, data = treasury_data)$fitted.values)
+)
+
+fitted_values <- melt(fitted_values,
+                      value.name = "fitted.values", 
+                      variable.name = "treasury.yield")
+
+bond_trend <- bond_trend %>%
+  filter(treasury.yield != "Output1")
+
+bond_trend <- cbind(bond_trend, fitted_values$fitted.values)
+
+bond_trend %>%
+  rename(fitted.values = `fitted_values$fitted.values`) %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = interest.rate), colour = "royalblue3", alpha = .75) +
+  geom_line(aes(y = fitted.values), size = 1.3, 
+            colour = "orange2", alpha = .25) +
+  facet_wrap(facets = "treasury.yield", nrow = 2) +
+  labs(title = "Input values plotted against fitted regression values for all bond categories",
+       subtitle = "All models have very close alignment between actual (blue line) and fitted (orange line)- 3YR is closest (Adj. R2 = 0.998)",
+       caption = "Source: Course Project Treasury Data")
+```
+
+Another crucial part of regression is checking on residuals against fitted values. While the previous plot shows the very close fit, it's also instructive to check to see how the residual and fitted are distributed using a scatterplot. For convenience, I've made a data frame to check all the bond categories simultaneously.
+
+In an ideal situation, the scatterplot should be randomly distributed but, with values as close to zero as possible. However, these plots do not show that. In fact, they all exhibit systematic error, which is not ideal. This again points to some underlying systematic issue with the variables; I think this adds further strength to the idea the output is an amalgam of the inputs in some way.
+
+```{r residuals vs fitted for all bonds}
+bond_categories <- colnames(treasury_data[,2:8])
+
+residual_check <- data.frame(
+  model = factor(rep(bond_categories, each = 8300), levels = bond_categories),
+  resid = c(linear3M$residuals, linear6M$residuals, linear2YR$residuals,
+            linear3YR$residuals, linear5YR$residuals, linear10YR$residuals,
+            linear30YR$residuals),
+  fitted = c(linear3M$fitted.values, linear6M$fitted.values, linear2YR$fitted.values,
+             linear3YR$fitted.values, linear5YR$fitted.values, linear10YR$fitted.values,
+             linear30YR$fitted.values))
+
+residual_check %>%
+  ggplot(aes(fitted, resid, colour = model)) +
+  geom_jitter(alpha = .2, show.legend = F) +
+  geom_hline(yintercept = 0, colour = "dodgerblue2", size = 1.3) +
+  facet_wrap(facets = "model", nrow = 2, scales = "free_y") +
+  labs(title = "Residuals vs fitted values for simple linear models from all bond categories",
+       subtitle = "Points should be randomly distributed around zero; however, all plots seem to have systematic patterns signalling model issues",
+       caption = "Source: Course Project Treasury Data",
+       y = "model residuals",
+       x = "fitted values")
+```
+
+
+***
+
+##Part 3: Linear modeling using inputs as outcome variable
+
+Moving into the next section, I'm developing linear models but, with the output as the predictor this time.
+
+```{r linear modelling- output1 ~ inputs}
+linear3M_output <- lm(treasury_data[,2] ~ Output1, data = treasury_data)
+
+linear6M_output <- lm(treasury_data[,3] ~ Output1, data = treasury_data)
+
+linear2YR_output <- lm(treasury_data[,4] ~ Output1, data = treasury_data)
+
+linear3YR_output <- lm(treasury_data[,5] ~ Output1, data = treasury_data)
+
+linear5YR_output <- lm(treasury_data[,6] ~ Output1, data = treasury_data)
+
+linear10YR_output <- lm(treasury_data[,7] ~ Output1, data = treasury_data)
+
+linear30YR_output <- lm(treasury_data[,8] ~ Output1, data = treasury_data)
+
+summary(linear3YR_output)
+```
+
+
+###Collect all slopes and intercepts in one table and print this table
+
+As per the instructions, I've collected all the slopes and intercepts with the same basic `apply` function used for the initial linear models. While the function is slightly redundant here, I wanted to get some development practice, so it's included.
+
+The intercepts follow the same basic pattern as the initial linear models and rise slowly from USGG3M to USGG30YR, though the values make up a narrower range. The slopes follow a similar construction as well. Perhaps more interesting is that both slope t-values are the same in both models. The formula for slope t-value is the slope coefficient divided by standard error and despite different values from both models, the t-value ends up being identical. How does this work?
+
+It's actually an instructive point to review. Despite differences in slopes and standard errors between models, since the same two variables are being used, the test statistic ends up being the same. Given a t-value measures the size of the difference relative to the variation in a sample, the switched input and output don't change this. In the same vein, the model R2 do not change given the amount of variance being explained by each model does not change. While a slight digression, it's important to delve into the underlying statistical work and review why these coefficients end up being the same number.
+
+```{r linear model coefficients- inputs ~ output1}
+output_coefficients <- function(columns){
+  input_df <- data.frame(
+  Model = colnames(treasury_data[,columns]),
+  t(apply(treasury_data[,columns], 2, function(x) summary(lm(x ~ Output1, treasury_data))$coefficients[c(1, 2, 5, 6, 7, 8)])))
+  
+  rownames(input_df) <- NULL
+  
+  input_df %>%
+    rename(Intercept = X1,
+           Slope = X2,
+           Intercept.t.value = X3,
+           Slope.t.value = X4,
+           Intercept.p.value = X5,
+           Slope.p.value = X6) %>% custom_kable()
+}
+
+(output_coef <- output_coefficients(2:8))  
+```
+
+***
+
+##Part 4: Logistic regression to analyze Fed easing and tightening
+
+Onto the logistic component focusing on federal reserve easing and tightening. This section starts with some data preparation. The initial set only has a one where the period of easing or tightening takes place. However, without any other markers, there isn't much to work with. To this end, this first chunk starts the process of transforming and combining these columns by making any period of easing equal to zero. Given this is a binary marker, since the fed cannot be simultaneously easing and tightening, these are now prepped for combination to make a period of tightening equal to one and easing zero.
+
+```{r federal cycle logistic}
+federal_cycles <- treasury_data %>%
+  mutate(Easing = ifelse(Easing == 1, 0, NA),
+         Tightening = ifelse(Tightening == 1, 1, NA))
+```
+
+Staying with the flow of the assignment, I checked against the original copy to make sure my transformed values match. In this case, they did.   
+
+```{r checking easing and tightening data}
+custom_kable(federal_cycles[c(550:560, 900:910, 970:980),c(1, 10, 11)])
+```
+
+As alluded to, the end goal here was to combine the federal monetary policy markers into one column, now called tightening. I've also created a stand-alone data frame for this component to avoid transforming the original data too much. In the same vein, there are numerous NA's (about 70%) so making a reduced set makes sense.
+
+```{r removing periods without easing or tightening}
+federal_cycles <- federal_cycles %>%
+  filter(!is.na(Easing) | !is.na(Tightening)) %>%
+  mutate(Tightening = ifelse(is.na(Tightening), 0, Tightening)) %>%
+  select(-Easing)
+```
+
+I thought doing a quick profile of the new set was reasonable since so many values were dropped. The table shows that federal reserve easing or tightening took place between fall 1981 and fall 1992, a period spanning slightly over a decade. To put this in perspective, the entire data set spans from January 1981 to June 2014, so a considerable portion has been removed for this component of the analysis.  
+
+```{r profiling tightening 1}
+federal_cycles %>%
+  summarise(min.date.range = min(Date),
+            max.date.range = max(Date),
+            date.range = difftime(max.date.range, min.date.range, units = "days"),
+            years.total = round(as.numeric(date.range) / 365)) %>%
+  custom_kable()
+```
+
+Additionally, the variable is fairly unbalanced. There are far more easing than tightening samples (1585 vs 773). 
+
+```{r profiling tightening 2}
+federal_cycles %>%
+  mutate(Tightening = ifelse(Tightening == 0, "Easing", "Tightening")) %>%
+  group_by(Tightening) %>%
+  count() %>%
+  summarise(period_count = n,
+            variable_percent = n / nrow(federal_cycles) * 100) %>%
+  custom_kable()
+```
+
+
+###Plot the data and the binary output variable representing easing (0) and tightening (1) periods
+
+Before jumping into the plots, some context is necessary. So far, I've eschewed reviewing the nuance of what easing and tightening entails from a monetary policy perspective. With this concept being essential to this section though, I’ve included a brief overview here.
+Central banks around the world use monetary policy to regulate specific factors within the economy. Central banks most often use the federal funds rate as a leading tool for regulating market factors. This can entail using rate setting as part of the fiscal policy tool kit. Tightening policy occurs when central banks raise the federal funds rate, and easing occurs when central banks lower the federal funds rate (Investopedia, 2018). With that in mind, the plot should highlight rates going up and down depending on federal policy mandate.
+
+Per the definition, these periods closely correspond to rate changes depending on the cycle. Points when the orange line is at 20 correspond to tightening periods; when the line drops to zero, there's an easing period. As is evident, all the bond rates and the output closely mirror these policy changes, albeit with different levels. 
+
+This plot only offers a one-dimensional, inward look at these cycles. There aren’t really any wider macro insights to be gained here about the US economy or market more generally since the predictors only focus on the fed. That said, these periods can easily be picked up so this would be an interesting follow up analysis.
+
+As an aesthetic note, I thought the original plot was too busy with colour so I made all the yields gray while highlighting the output and federal reserve monetary cycles. I think this makes added sense given my intuition that the output seems to be a combination of the input predictors, something which this plot reasonably strengthens given how all the variables move in such close concert during the easing and tightening.
+
+```{r federal easing and tightening trend}
+fed_trend <- federal_cycles %>%
+  select(-Date) %>%
+  mutate(Tightening = Tightening * 20,
+         index = 1:nrow(federal_cycles)) %>%
+  melt(value.name = "interest.rate", 
+       variable.name = "treasury.yield",
+       id.vars = "index")
+
+fed_trend %>%
+  ggplot(aes(index, interest.rate, colour = treasury.yield)) +
+  geom_line(aes(size = treasury.yield)) +
+  scale_y_continuous(breaks = seq(-20, 30, 5)) +
+  scale_colour_manual(values = c("lightgray", "lightgray", "lightgray", "lightgray",
+                                 "lightgray", "lightgray", "lightgray", "royalblue2",
+                                 "darkorange"),
+                      name = "Treasury.Legend",
+                      breaks = c("USGG3M", "Output1", "Tightening"),
+                      labels = c("Bonds", "Output1", "Monetary.Tightening")) +
+  scale_size_manual(values = c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.75, 1.5),
+                    guide = "none") +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  labs(title = "Bond yields, output, and federal tightening periods- Includes 2358 days between 1981 and 1992",
+       subtitle = "Rates and output seem to have positive association with federal activities (i.e. rise in tightening, fall during easing)",
+       y = "Data and Binary Federal Tightening",
+       x = "Samples",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Estimate logistic regression with 3M yields as predictors for easing/tightening output and then plot the fitted values
+
+This simple logistic model is useful for understanding whether the federal reserve is either easing or tightening based on the USGG3M interest rate levels. The model summary offers insights towards this end.
+
+Overall, the slope and intercept are very significant as indicated by their respective p-values. This isn't all that surprising given the two variables are inherently linked from a practical perspective given the federal reserve lowers or raises during a period of easing or tightening.
+
+Moving onto the slope coefficient, the summary indicates that for a one unit increase in USGG3M, the log odds of being in a tightening period increase by about 0.186, or about 1.2% in real terms. This explanation is perfunctory however and requires some more pragmatic context. Harkening back to what the Federal Reserve is doing with tightening, these periods mark an increase in interest rates. This policy direction is therefore, by definition, noted for rising rates. As such, the model picks up this intuitive relationship between a tightening period and interest rate increases. The model verifies a real-world association and signals that as rates rise, the likelihood of being in a tightening period, denoted with log odds, increases. 
+
+On top of this, the samples included for the model are only between 1981 and 1992 when the rates tended to be much higher than in the later 1990s and 2000s. As such, the relationship is likely accentuated more than would be if the entire sample were included.
+
+```{r 3M logistic regression}
+logistic_3M <- glm(Tightening ~ USGG3M, 
+                   data = federal_cycles,
+                   family = binomial(link = logit))
+
+summary(logistic_3M)
+```
+
+As always, a visual representation of this association is instructive for better understanding its dynamic. While logistic models deal with binary outcome variables, bivariate plots with regression lines can still be constructed using `ggplot2`. The output is quite similar to a normal scatterplot with a line but, the y-axis here is either a one or zero signifying the monetary period. Despite this, the logistic line still highlights the relationship even though the outcome variable is binary (owing to a binomial family line function). This further confirms the logistic model summary and shows the positive association between tightening periods and increasing rates.
+
+```{r 3M logistic regression plot}
+federal_cycles %>%
+  ggplot(aes(USGG3M, Tightening)) +
+  geom_point(alpha = .1, colour = "darkorange") +
+  geom_smooth(method = "glm", size = 1.5, se = FALSE,
+    method.args = list(family = "binomial")) +
+    labs(title = "Federal Reserve easing and tightening periods vs USGG3M yield rates with logistic line",
+       subtitle = "As yield rates rise, the likeliehood of being in a tightening period (1) increases",
+       y = "Binary Federal Tightening",
+       caption = "Source: Course Project Treasury Data")
+```
+
+Continuing with visualizations which aid the model, I've plotted the logistic fitted values against the other bonds rates, output, and monetary policy periods. The log odds have been transformed into interest rate units by multiplying the variable by 20 (which is not mathematically derived and is only done for effect). Both the fitted values and original interest rates are highlighted on the plot so as to make comparison easier. The model provides close estimates for the interest rates. Interestingly, the shape of the lines are almost identical but, the fitted values are offset by several points below the actuals. As such, the model seems to provide an output with high, though consistent, bias alongside low variance (i.e. fitted values are consistently low but without much other variation from the original rates). 
+
+Despite the transformation being done for visual appeal, it makes the log odds appear favourably to the originals. This is a good sign that the model picks up the association between interest rates and tightening. The clear uptick of fitted values during the known tightening periods and drop during easing further confirms the model seems to capture association between rates and policy quite well.
+
+```{r plotting 3M fitted values, warning=FALSE}
+fed_trend <- data.frame(
+  index = 1:nrow(federal_cycles),
+  treasury.yield = "Fitted.Values",
+  interest.rate = logistic_3M$fitted.values * 20) %>%
+  bind_rows(fed_trend)
+  
+fed_trend %>%
+  ggplot(aes(index, interest.rate, colour = treasury.yield)) +
+  geom_line(aes(size = treasury.yield)) +
+  scale_y_continuous(breaks = seq(-20, 30, 5)) +
+  scale_colour_manual(values = c("#B452CD", "lightgray", "darkorange", "lightgray",
+                                 "lightgray", "lightgray", "royalblue2", "lightgray",
+                                 "lightgray", "lightgray"),
+                      name = "Treasury.Legend",
+                      breaks = c("Fitted.Values", "USGG3M", "Output1", "Tightening"),
+                      labels = c("Fitted.Values", "USGG3M", 
+                                 "Bonds and Output1", "Monetary.Tightening")) +
+  scale_size_manual(values = c(1, 0.75, 1.5, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
+                    guide = "none") +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  labs(title = "Bond yields, output, and federal tightening periods- Includes 2358 days between 1981 and 1992",
+       subtitle = "Rates and output seem to rise in tightening and fall during easing- Logistic regression fitted values follow this trend",
+       y = "Data and Binary Federal Tightening",
+       x = "Samples",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Use all inputs as predictors for logistic regression
+
+Building on the previous work, I developed a logistic regression model with all the bond categories.
+
+```{r all inputs logistic regression}
+logistic_full <- glm(Tightening ~ USGG3M + USGG6M + USGG2YR +
+                       USGG3YR + USGG5YR + USGG10YR + USGG30YR, 
+                   data = federal_cycles,
+                   family = binomial(link = logit))
+```
+
+###Explore the model. Interpret the coefficients and the fitted values
+
+In stark contrast to the simple logistic model, this summary is filled with contradictions and is difficult to interpret. All the model slopes are very significant, save for the 10 year bond class, which at a .32 p-value is not especially close. Further, the slope coefficients seem almost antithetical: three predictors suggest a decrease in log odds (including USGG3M, which was positive in the simple logistic model) while four indicate an increase for predicting easing and tightening.  The log odds also don’t make sense. For example, the USGG3M coefficient shows -3.3456 log odds decrease (about 28% when exponentiated), which is essentially cancelled out by the USGG30YR log odds at 3.3254 (about 28% as well). When viewed in totality, the exponentiated log odds almost cancel each other out given a balance of increases and decreases. All considered, these results are erratic and as a result, model interpretation suffers. 
+
+My guess for why this model seems erratic is based on having too many correlated predictors. All the bond categories are highly, if not almost perfectly, correlated and this can obfuscate individual predictor contributions to the model and generally, provide some confusing coefficients. Collinearity, or multi-collinearity in this case, amongst predictors can increase standard error coefficients leading to non-significance. This is a major issue because the model is being used to determine the effect of each predictor during a specific policy cycle.
+
+```{r full logistic review- summary}
+summary(logistic_full)
+```
+
+Building on the previous points, developing a model with only two terms, the 3 and 6 month category, further highlights the effect of colinearity. Even with only one extra term, the USGG3M predictor shows a complete change from a single predictor model and becomes negative. Again, I feel this might be driven by colinearity as the extra term inclusion here drives a very big change in predictor coefficients.
+
+```{r 3M and 6M logistic regression}
+logistic_months <- glm(Tightening ~ USGG3M + USGG6M,
+                   data = federal_cycles,
+                   family = binomial(link = logit))
+
+summary(logistic_months)
+```
+
+The initial model was easy to understand but, did have a higher AIC. This metric is used in model comparison and a lower AIC is generally desirable. However, interpretation is crucial and despite having a better AIC, the full model is more difficult to work with given one of the key goals here is understanding the relationship between interest rates and federal reserve monetary policy cycles. Additionally, the assumptions of AIC, namely that the model residuals are i.i.d Gaussian, are not met so it might not be appropriate in this scenario.
+
+```{r logistic aic comparison}
+AIC(logistic_3M, logistic_full) %>% 
+  custom_kable()
+```
+
+The fitted values plot is very noisy and doesn't help illuminate what policy period the fed is in. For example, in the first easing window, the values range from about eighteen to zero and fluctuate substantially. This window isn't atypical either as periods of easing and tightening see erratic fitted value changes which are out of sync with the policy cycles. As aforementioned, the logistic model is being used primarily for driving a more thorough understanding of the easing and tightening periods using interest rates. By plotting the fitted values, its possible to visualize rates and fitted values over time as well. For this reason, the simpler model with greater interpretation seems like a better choice in this case.
+
+```{r plotting all fitted values, warning=FALSE}
+fed_trend <- data.frame(
+  index = 1:nrow(federal_cycles),
+  treasury.yield = "Fitted.Values",
+  interest.rate = logistic_full$fitted.values * 20) %>%
+  bind_rows(fed_trend)
+  
+fed_trend %>%
+  ggplot(aes(index, interest.rate, colour = treasury.yield)) +
+  geom_line(aes(size = treasury.yield)) +
+  scale_y_continuous(breaks = seq(-20, 30, 5)) +
+  scale_colour_manual(values = c("royalblue2", "lightgray", "darkorange", "lightgray",
+                                 "lightgray", "lightgray", "lightgray", "lightgray",
+                                 "lightgray", "lightgray"),
+                      name = "Treasury.Legend",
+                      breaks = c("Fitted.Values", "Output1", "Tightening"),
+                      labels = c("Fitted.Values", "Bonds & Output1",
+                                 "Monetary.Tightening")) +
+  scale_size_manual(values = c(0.1, 0.1, 1.5, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
+                    guide = "none") +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  labs(title = "Bond yields, output, and federal tightening periods- Includes 2358 days between 1981 and 1992",
+       subtitle = "Rates and output seem to rise in tightening and fall during easing- Logistic regression fitted values follow this trend",
+       y = "Data and Binary Federal Tightening",
+       x = "Samples",
+       caption = "Source: Course Project Treasury Data")
+```
+
+However, because I was curious about how each would do in a prediction task, I split up the logistic regression data frame and developed models for USGG3M and all predictors on training data. Using these on a test set, it's possible to gauge which model had better predictive utility. Neither is all that good, probably in some part owing to an unbalanced sample, but the full model has a higher balanced accuracy (59 % vs 46%). While this is certainly a digression, this provides some contextual support for how an analysis goal helps shape which model is preferable in a given situation. While the prediction task was better using the full model, its interpretation is still lacking for an inquiry based on better understanding relationships.
+
+```{r bonus- logistic prediction, message=FALSE, warning=FALSE}
+library(caret)
+
+federal_cycles <- federal_cycles %>%
+  mutate(Tightening = as.factor(Tightening))
+
+set.seed(1017)
+data_split <- createDataPartition(y = federal_cycles$Tightening, p = .7, list = F)
+
+fed_train <- federal_cycles %>%
+  slice(data_split)
+
+fed_test <- federal_cycles %>%
+  slice(-data_split)
+
+train_3M <- glm(Tightening ~ USGG3M, 
+                data = federal_cycles,
+                family = binomial(link = logit))
+  
+train_full <-  glm(Tightening ~ USGG3M + USGG6M + USGG2YR +
+        USGG3YR + USGG5YR + USGG10YR + USGG30YR, 
+        data = federal_cycles,
+        family = binomial(link = logit))
+
+model_predictions <- data.frame(
+  three_probs = predict(object = train_3M, newdata = fed_test, type = "response"),
+  full_probs = predict(object = train_full, newdata = fed_test, type = "response")
+)
+
+model_predictions <- model_predictions %>%
+  mutate(three_preds = ifelse(three_probs > .5, "1", "0"),
+         full_preds = ifelse(full_probs > .5, "1", "0"))
+
+confusionMatrix(model_predictions$three_preds, fed_test$Tightening)
+
+confusionMatrix(model_predictions$full_preds, fed_test$Tightening)
+```
+
+
+###Calculate and plot log-odds and probabilities. Compare these probabilities with fitted values
+
+I've put together a faceted plot to review the logistic log odds and probabilities at once. While the log odds have a different scale, it is still the same basic shape as both of the other probabilities. The exponentiated log odds, labeled here as probability, are the same as fitted values so both these lines are identical. This is because the probability is derived from the model's predicted values, gathered using `predict`, and these provide the untransformed fitted values. In fact, by adding the term `type = response` to the `predict` call provides the converted probabilities. As such, showing both is somewhat redundant but, it does shed light on how R performs certain tasks which is always useful.
+
+```{r full model log odds and probability, warning=FALSE}
+logistic_odds <- data.frame(
+  odds = "log.odds",
+  values = predict(logistic_full))
+
+logistic_odds <- data.frame(
+  odds = "probability",
+  values = 1 / (exp(-logistic_odds$values) + 1)) %>%
+  bind_rows(logistic_odds)
+
+logistic_odds <- data.frame(
+  odds = "fitted.values",
+  values = logistic_full$fitted.values) %>%
+  bind_rows(logistic_odds)
+
+logistic_odds %>%
+  mutate(Index = rep(1:nrow(federal_cycles), 3),
+         odds = factor(odds, levels = c("log.odds", "probability", "fitted.values"))) %>%
+  ggplot(aes(Index, values, colour = odds)) +
+  geom_line(size = 1.3) +
+  facet_wrap(facets = "odds", scales = "free_y", ncol = 1) +
+  scale_colour_manual(values = c("royalblue2", "darkorange", "#EE6AA7")) +
+  theme(legend.position = "none") +
+    labs(title = "Log odds and probabilities for logistic regression model with all predictors",
+         subtitle = "Both probability (orange line) and fitted values (pink line) are identical despite being derived differently (exp log odds vs glm fitted values)",
+         y = "Fitted Values & Log-Odds",
+         x = "Samples",
+       caption = "Source: Course Project Treasury Data")
+```
+
+***
+
+##Part 5: Full and combination-based linear regression
+
+This section focuses on developing linear models with more than one predictor, including one with all bond categories. I'll work to find the most suitable linear model by looking at different combinations of predictors as well.
+
+###Estimate the full model by using all 7 predictors and provide interpretation. How good is the fit? How significant are the parameters?
+
+As with the logistic regression, I've put together a data frame with only the variables needed for modelling. 
+
+```{r creating regression set}
+bond_regression <- treasury_data %>%
+  select(-Date, -Easing, -Tightening)
+```
+
+To start, I've put together a full model with all the predictors. This call differs slightly than the logistic model with all predictors since I've opted to use the `y ~ .` to signify all predictors instead of putting in their individual names. However, the output is still the same.
+
+```{r full linear model development}
+linear_full <- lm(Output1 ~ ., data = bond_regression)
+```
+
+I've collected the full model coefficients below. The slope and estimate coefficients are probably the least interesting part of this table. It highlights that a full model would have an intercept around -14.9 and that each predictor contributes between around .3 and .42 to output changes. Taken together, they sum up to about 2.64, which is about the unit change for one of the initial simple linear models. While this is a rough way of thinking about each contribution, given each predictor is so highly correlated I thought it was worth including.
+
+What's far more interesting here are the standard errors and t-values. Each of the inputs has a standard error of zero. In practical terms, this helps illuminate how far each fitted value is from the actuals; a smaller standard error points to better model fit and predictions. Here, there simply are no standard errors. The resulting significance testing, which utilizes these values, produces massive t-values and extremely significant tests. However, when a model seems too good to be true, there's cause for thinking something is amiss.  
+
+```{r full linear model coefficients}
+summary(linear_full)$coefficients %>%
+  custom_kable()
+```
+
+Building on this, the full model variance explanations (R2 and adjusted R2) confirm what I've alluded to throughout the analysis, namely that Output1 is some combination of the input variables. The final telltale sign here is perfect variance explanation. Values of 1 for R2 and adjusted R2 indicate there is no variance left unexplained. While this might seem ideal, it has obvious negative implications for any modelling task. Without any variance, in theory a perfect model fit, there really isn't any model in a traditional sense. Since the output is some combination of the inputs, there's no error or variance to model and the model simply describes the sample data; the predictors are the output, and the output is comprised of the predictors. With this in mind, the full regression model is not the best choice here given it just describes data negating the need for a model.
+
+```{r full model variance explained}
+unlist(summary(linear_full)[8:9]) %>% 
+  custom_kable()
+```
+
+The degrees of freedom here refer to the number of predictors being used (8 from n - 1) while the larger number, df2, is the number of total samples minus total predictors (8300 - 8 = 8292 from n - k - 1). These are used during calculations for R2 and adjusted R2.
+
+```{r full model degrees of freedom}
+unlist(summary(linear_full)[7]) %>% 
+  custom_kable()
+```
+
+As always, it’s good to check the full model residuals. The pattern here is unexpected for a model with an R2 of 1. I thought the all the points would be perfectly aligned on the line straddling zero but, they have a distinct “H” formation. When looking at the scale, these are all essentially zeroes, which is in line with my expectations. However, points to the left of 10 and right of -10 deviate into unique clusters. This would seem to indicate that at higher and lower output ranges, the fitted values are slightly less than perfect. Getting ahead a bit, since the output appears to be some combination, it’s possible it is less representative at these more extreme values (although this is a guess).
+
+```{r full model residuals}
+autoplot(linear_full, which = 1) +
+  labs(title = "Fitted vs residuals for full linear model")
+```
+
+
+###Estimate the Null model by including only intercept and explore the model. Why does the summary not show an R2?
+
+I've put together a null model here, which only includes an intercept. To construct this model in R, the `lm` call includes only the output variable and a 1 for input, which denotes the intercept. 
+
+```{r developing null model}
+linear_null <- lm(Output1 ~ 1, data = bond_regression)
+```
+
+The null model is used to show what the regression would look like without any predictors. It essentially acts as the null hypothesis since the model cannot include any effects and hence, all coefficients must be zero. When looking at the table, this is true as seen with an intercept estimate of zero. Since there isn't any hypothesis testing to be done, given this is essentially the null hypothesis, there is no t-value and the p-value is 1 (signifying the null hypothesis is true).
+
+```{r null model coefficients}
+summary(linear_null)$coefficients %>% 
+  custom_kable()
+```
+
+The previous explanation further situates why there is no variance being explained. To have any value for R2 and adjusted R2, there has to be predictors included which might explain some of the output variance. Without any predictors, there simply isn't anything to explain variance, hence, by definition, there must be an R2 and adjusted R2 of zero when dealing with the null model.
+
+```{r null model variance explained}
+unlist(summary(linear_null)[8:9]) %>% 
+  custom_kable()
+```
+
+###Conduct anova test using full and null model
+
+The anova highlights that there is a significant difference between the null model and the full model, which suggests that there is a relationship between the input variables and the output. In essence, this means that the null hypothesis can be rejected in favour the alternative, which is the difference is not equal to zero (i.e. the model has a slope greater than 0). This isn't surprising given all the previous work leading up to the test. The analysis of variance is evaluating how much variance is attributable to model versus the null, so the result is in line with the other findings.
+
+```{r full and null anova test}
+anova(linear_full, linear_null)
+```
+
+
+###Repeat the analysis for different combinations of input variables and select the one you think is the best- explain your selection
+
+I've already indicated why I don't think the full model is preferable here but, to reiterate, since it's got a perfect fit it doesn't do much outside of describing data. There needs to be some variance left unexplained for a model to have some wider utility because there's no need for a model if the fit is perfect.
+
+What constitutes the best model here is tricky though. I've established why the full model isn't useful from a statistical perspective but, I also think the analysis clearly points to the output being a combination of the inputs. With that in mind, models are essentially uncovering how much each variable explains about a combination of all the predictors. The utility of this might be to figure out which predictors by themselves, or in some non-full combination, explain the most for output1, thereby showing which is weighted most in the combination. In any case, there needs to be an R2 less than 1.
+
+All considered, I think the best model is one that strikes a balance between high R2 and interpretability. In essence, I think the most preferable model is parsimonious, one which includes the fewest inputs with the most variance explained. Much like the logistic regression, these models are used for broad understanding so there should be a strong preference towards a model that can be explained and easily interpreted. Following these criteria, the model for USGG3YR is my selection for being the best, or more realistically, the most appropriate for the given situation. Viewing the anova test, the model is still very significant and, as the simple linear section showed, it outperforms other bond categories for variance explained.
+
+```{r anova on null and 3YR}
+anova(linear3YR, linear_null)
+```
+
+Since I haven't yet shown any combinations, I'll use a comparison to highlight why I prefer the single-term model. The chunk below develops a model including USGG3M, USGG6M, and USGG30YR. As the anova shows, its the preferred model and adds more explanatory power when compared to USGG3YR. 
+
+```{r anova on mixed model and 3YR}
+linear_mixed <- lm(Output1 ~ USGG3M + USGG6M + USGG30YR, data = bond_regression)
+
+anova(linear_mixed, linear3YR)
+```
+
+However, the model summary provides insight into why I prefer the USGG3YR model. The same multi-collinearity seen in the logistic section plagues model interpretation here as well. USGG3M shows a negative relationship with the output while the other two remain positive. Again, this doesn’t conform to previous work and by this point, my intuition flags it as suspect as well. Additionally, this model only adds a minor amount to R2 when compared to the USGG3YR model (.9979 vs .9988).
+
+This goes back to selecting a model based on the overall analysis goal. Since it's fairly clear the output is a derivation of the inputs, the model shouldn’t, or plainly wouldn't, be used for prediction. This leaves the model as useful for understanding how specific inputs are related to the output, which favours simple, interpretable results. For this, I think the USGG3YR is the best because it provides insight into the relationship between one bond category and the output while having the highest R2 and clear coefficients. As a final point, realistically any of the single term models does a reasonable job highlighting the input and output association but, the USGG3YR also seems to explain the most variance so it's my choice.  
+
+```{r mixed model summary}
+summary(linear_mixed)
+```
+
+
+***
+
+##Part 6: Rolling analysis, volatility, and pairwise analysis
+
+###Perform rolling window analysis of the yields data
+
+Essentially, the `rollapply` function, with specific parameters set for `width` and `by`, takes the rolling mean of each bond category. `Width` tunes how many samples are taken (20) while `by` is used to set where each rolling mean starts (in this case, every fifth window, or time point). The final dimensions of the rolling means object shows how `by` works since it's 1657 rows, or about 8300 divided 5.
+
+```{r rolling means analysis- window tuning and function}
+window_width <- 20
+
+window_shift <- 5
+
+rolling_means <- rollapply(bond_regression,
+                           width = window_width,
+                           by = window_shift,
+                           by.column = TRUE,
+                           mean)
+
+head(rolling_means) %>%
+  custom_kable()
+```
+
+It's fairly straightforward to recreate how this works on a small scale. Basically, the function takes a mean for rows 1 to 20, then skips five rows and takes another for 6 to 25. This process is repeated across the entire data set for all columns (given `by.colum` is set to true).
+
+```{r rolling mean explained}
+roll_mean <- bond_regression %>%
+  slice(6:25) %>%
+  summarise(USGG3M_roll = mean(USGG3M),
+            USGG6M_roll = mean(USGG6M),
+            USGG2YR_roll = mean(USGG2YR),
+            USGG3YR_roll = mean(USGG3YR),
+            USGG5YR_roll = mean(USGG5YR),
+            USGG10YR_roll = mean(USGG10YR),
+            USGG30YR_roll = mean(USGG30YR))
+
+bond_regression %>%
+  slice(1:20) %>%
+  summarise(USGG3M_roll = mean(USGG3M),
+            USGG6M_roll = mean(USGG6M),
+            USGG2YR_roll = mean(USGG2YR),
+            USGG3YR_roll = mean(USGG3YR),
+            USGG5YR_roll = mean(USGG5YR),
+            USGG10YR_roll = mean(USGG10YR),
+            USGG30YR_roll = mean(USGG30YR)) %>%
+  bind_rows(roll_mean) %>%
+  custom_kable()
+```
+
+The next chunk highlights these windows which I described. Starting at 1 and moving across the row, the final column value is 20. The next row is the 6 to 25 window which was used to calculate the mean above as well. 
+
+```{r creating rolling window intervals}
+window_count <- seq(bond_regression$USGG3M)
+
+rolling_window <- rollapply(window_count,
+                            width = window_width,
+                            by = window_shift,
+                            by.column = FALSE,
+                            FUN = function(z) z)
+
+head(rolling_window, 10) %>%
+  custom_kable()
+```
+
+This object helps set up filtering so when these values need to be plotted, they can be placed into the right spot with their corresponding USGG3M.
+
+```{r rolling mean calculation points}
+calculation_points <- rolling_window[,10]
+
+c(calculation_length = length(calculation_points)) %>%
+  custom_kable()
+```
+
+My code diverges from the provided example here. The original code works towards setting up a matrix with USGG3M in one column and the rolling mean calculation in another. Using this, the variables are visualized. I've done the same thing but, used a data frame so I can utilize `ggplot2` instead.
+
+```{r creating rolling means df}
+plot_means <- bond_regression %>%
+  select(USGG3M) %>%
+  mutate(mean_calculation = 0)
+  
+plot_means$mean_calculation[calculation_points] <- rolling_means[,1]
+
+head(plot_means, 20) %>%
+  custom_kable()
+```
+
+However, I still get the same plot, albeit formatted differently. As seen, the rolling mean points follow the general trend line of USGG3M.
+
+```{r rolling mean plot}
+plot_means %>%
+  mutate(index = seq(plot_means$mean_calculation),
+         mean_marker = ifelse(mean_calculation != 0, T, F)) %>%
+  ggplot(aes(x = index, colour = mean_marker)) +
+  geom_point(aes(y = mean_calculation, alpha = mean_marker), size = .75) +
+  geom_line(aes(y = USGG3M), colour = "darkgray", size = 2, alpha = .4) +
+  scale_alpha_discrete(range = c(0, 1), guide = FALSE) +
+  scale_colour_manual(values = c("white", "darkorange"),
+                      name = "Rolling Calculation",
+                      breaks = "TRUE",
+                      labels = "mean") +
+  labs(title = "USGG3M bond yields (gray line) and rolling mean values (orange dots)",
+       y = "USGG3M (Value and Rolling Mean)",
+       x = "Index",
+       caption = "Source: Course Project Treasury Data")
+```
+
+###Run the rolling daily difference for the standard deviation of each variable
+
+Executing this requires making a matrix containing the difference between variables before a `rollaply` for the standard deviation can be applied. To do this, I've used `apply` with the `diff` function to take the difference of each column (marked by 2). Thereafter, I've added in the dates using `rownames` so the samples can be verified.
+
+```{r daily difference between variables}
+sd_diff <- apply(bond_regression, 2, diff)
+
+rownames(sd_diff) <- treasury_data$Date[-1]
+
+head(sd_diff) %>%
+  custom_kable()
+```
+
+From there, the same `rollapply` method used for means can be done for standard deviation. I've also added the date variable back into the bond regression set as it’s needed for visualizations.
+
+Before moving on, I'll address what the rolling standard deviation might be useful for. Standard deviation here essentially comprises a volatility rating. Since the rates are reasonably homogeneous in short date windows, any increased standard deviation marks rate fluctuations. With this in mind, it will be useful for picking out adverse financial events. Major events to watch for include the 2008 recession, which act as an intuitive benchmark to gauge how well this rolling standard deviation captures volatility.
+
+```{r sd for daily difference between variables}
+bond_regression <- treasury_data %>%
+  select(Date) %>%
+  bind_cols(bond_regression)
+
+rolling_sd <- rollapply(sd_diff,
+                           width = window_width,
+                           by = window_shift,
+                           by.column = TRUE,
+                           sd)
+
+head(rolling_means) %>%
+  custom_kable()
+```
+
+I'm collecting the dates that accord to the rolling standard deviation measurements so they can be merged with the calculated values and analyzed. In the previous chunk I reintroduced date into the data frame and here, I'm using `rollapply` with a customized `paste` function the collect the samples. This yields a large character matrix which captures the rolling window dates.
+
+```{r dates for rolling sd}
+rolling_dates <- rollapply(bond_regression[-1,1],
+                           width = window_width,
+                           by = window_shift,
+                           by.column = FALSE,
+                           function(x) paste0(x))
+
+head(rolling_dates) %>%
+  custom_kable()
+```
+
+Finally, I've unified all the composite pieces in a single data frame with all the required rolling standard deviation calculations for USGG3M, USGG5YR, USGG30YR, and Output1. As with before, the samples for the middle of the dates window (hence the 10th column).
+
+```{r creating rolling sd df, warning=FALSE}
+rownames(rolling_sd) <- rolling_dates[,10]
+
+plot_sd <- as.data.frame(rolling_sd) %>%
+  add_rownames(var = "Date") %>%
+  select(Date, USGG3M, USGG5YR, USGG30YR, Output1)
+
+head(plot_sd) %>%
+  custom_kable()
+```
+
+
+###How is volatility related to the level of rates?
+
+Without having gone in-depth on the volatility and rates analysis yet, the initial plot shows some major adverse events. The one intuitive benchmark I mentioned, the 2008 financial crisis, stands out as one of the largest spikes across all categories. This is a good sanity check to see if the rolling standard deviation does measure something akin to volatility. There are several other big spikes on the plot as well, although the categories broadly account for them in different ways. However, the plot is slightly busy owing to the four lines interacting.    
+
+```{r volatility plot}
+plot_sd <- melt(plot_sd, 
+                id.vars = "Date", 
+                variable.name = "bond_category",
+                value.name = "rolling_sd")
+
+plot_sd %>%
+  mutate(Date = as.Date(Date)) %>%
+  ggplot(aes(Date, rolling_sd, colour = bond_category)) +
+  geom_line(size = 1.3, alpha = .4) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  labs(title = "Bond volatility for USGG3M, USGG5YR, USGG30YR, and Output1",
+       subtitle = "Large volatilty spikes evident in plot- USGG3M has biggest spike for bonds while Ouput1 shows most variability",
+       y = "Rolling Standard Deviation",
+       x = "Date",
+       caption = "Source: Course Project Treasury Data")
+```
+
+To better see the effects, I decided to split each category into its own facet plot. Before that though, I've taken the median standard deviation for each class. I'm saving the resulting as a data frame so the median volatility can be added to each plot to better situate the adverse events. Here, I've elected to take median to offset the influence of the larger volatility spikes that would sway the mean. As seen below, USGG3M seems to have the lowest volatility median followed by USGG5YR and USGG30YR. Output1 is the highest, which isn't too surprising given it seems to an aggregate of all the bond classes; in essence this is like a total volatility marker for all bonds.
+
+```{r median sd by bond category}
+volatility_medians <- plot_sd %>%
+  group_by(bond_category) %>%
+  summarise(volatility_median = median(rolling_sd))
+
+volatility_medians %>%
+  custom_kable()
+```
+
+As one final point before the plots, I wanted to look at the volatility standard deviations for each bond category. This is a marker of how variable each volatility calculation is, while also being very meta by taking the standard deviation of standard deviations. It looks like the longer-term bond categories are less volatile, which seems like an intuitive result since short-term rates are more likely disrupted by adverse events.
+
+```{r sd by bond category macro statistics}
+plot_sd %>%
+  group_by(bond_category) %>%
+  summarise(group_min = min(rolling_sd),
+            group_max = max(rolling_sd),
+            group_sd = sd(rolling_sd)) %>%
+  arrange(group_sd) %>%
+  custom_kable()
+```
+
+The plot below is easier to review than the combined line plot. Additionally, the median lines help situate where the major volatility events are as well. Overall, it further confirms the preceding volatility analysis.  
+
+```{r facetted volatility plot}
+plot_sd %>%
+  mutate(Date = as.Date(Date)) %>%
+  ggplot(aes(Date, rolling_sd, colour = bond_category)) +
+  geom_line(size = 1.3, show.legend = F) +
+  geom_hline(data = volatility_medians, aes(yintercept = volatility_median),
+             alpha = .4, size = 1.3 ,colour = "dodgerblue2") +
+  facet_wrap(facets = "bond_category") +
+    labs(title = "Bond volatility for USGG3M, USGG5YR, USGG30YR, and Output1",
+       subtitle = "Median standard deviation (blue line) highlights periods of high volatility- USGG3M has biggest spike for bonds while Ouput1 shows most variability",
+       y = "Rolling Standard Deviation",
+       x = "Date",
+       caption = "Source: Course Project Treasury Data")
+```
+
+To pull out dates with more than .5 volatility, I've made a quick table below. For this component, I've included the top 10 rolling standard deviation measurements by date. All of the top ten belong to Output1. In total, there are 51 samples that meet this criterion.
+
+```{r dates with greater than .5 volatility}
+plot_sd %>%
+  filter(rolling_sd > .5) %>%
+  select(Date, bond_category, rolling_sd) %>%
+  arrange(rolling_sd) %>%
+  slice(1:10) %>%
+  custom_kable()
+```
+
+However, this still remains a univariate review. To better compare how these periods affected bond rates and Output1, I've used a `rollapply` with `lm` to fit linear models of these bond categories with the outcome variable.
+
+```{r rollapply lm}
+coefficients <- rollapply(bond_regression[,-1],
+                          width = window_width,
+                          by = window_shift,
+                          by.column = FALSE,
+                          FUN = function(z) coef(lm(Output1 ~ USGG3M + USGG5YR + USGG30YR, data = as.data.frame(z))))
+
+rolling_dates <- rollapply(bond_regression[,1],
+                           width = window_width,
+                           by = window_shift,
+                           by.column = FALSE,
+                           function(x) paste0(x))
+
+rownames(coefficients) <- rolling_dates[,10]
+
+head(coefficients, 10) %>%
+  custom_kable()
+```
+
+
+###Create a pairwise plot and interpret the findings
+
+The plot below displays the pairwise coefficients from the previous linear regressions. The coefficients for each bond category represent the unit association with Output1 during the high volatility days. The model intercept, where Output1 falls without any variable interaction, can be compared to each category coefficient.
+
+Across the top row, there is a correlation coefficient for each bond category in relation to the intercept. Not surprisingly, two are negative associations and one is positive. I expected a mix of signs owing to collinearity, which has been reviewed in previous sections and once again appears here. The negative correlation for USSG3M is just in the weak category while the USGG30YR crosses into medium strength. The USGG5YR is weak positive but, the interpretation suffers due to collinearity. Overall, there seems to be some evidence for a negative correlation between high volatility days and downward pressure on rates. The above correlations are also captured in the first column where each slope coefficient is plotted against the corresponding intercept value for high volatility days. I've included regression lines to better situate the associations.
+
+The other scatterplots show the interaction between the various bond category slope coefficients. The strongest relationship is between USGG5YR and USGG30YR, which has a strong, negative correlation (-.833). This captures how both slope coefficients move strongly down during high volatility periods. The remaining two pairs plots are less significant given they show very weak correlations. Taking the macro view though, I think intuitively these slope coefficients should move downwards during high volatility, which would be more evident if each model was done individually to avoid collinearity.  That said, outside of intuition, there is still evidence here that there is a negative association between rates and high volatility periods.
+
+```{r pairwise plot}
+coefficients <- as.data.frame(coefficients)
+
+regression_pairs <- function(data, mapping, ...){
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_point() +
+    geom_smooth(method = lm, color = "blue", ...)
+  p
+}
+
+coefficients %>%
+  ggpairs(title = "Pairwise plot for USGG3M, USGG5YR, and USGG30YR",
+          lower = list(continuous = regression_pairs))
+```
+
+
+###Plot the coefficients. Is the picture of coefficients consistent with the picture of pairs? If yes, explain why.
+
+To assess this question, it's important to keep the correlations in mind from the previous plot. I've developed a specific correlation plot here to re-emphasize how the respective bond category coefficients are correlated. At a high level, the takeaway here is USGG3M has weak correlation with both the other categories while USGG5YR and USGG30YR have a strong negative correlation.
+
+```{r coefficients corrplot}
+corplot_df <- cor(coefficients[,-1])
+
+corrplot.mixed(corplot_df,
+               title = "High volatility linear model correlations", 
+               mar = c(0, 0, 1, 0))
+```
+
+Continuing the pairs comparison, it's clear here that the USGG3M (red line) has a different shape than the other two lines. This is punctuated starting around the financial crisis when the category has erratic coefficients. In other periods, like the early 2000s, the category is also noticeably out of sync with the other two lines. These relationships were relatively evident in both the bivariate scatterplot and correlation plot but, they also appear well enough here. Intuitively, this makes sense given the underlying data hasn't changed, only the visualization medium has.
+
+```{r high volatility slope coefficients, warning=FALSE, message=FALSE}
+volatility_lm <- melt(coefficients,
+             variable.name = "bond_category",
+             value.name = "coefficients")
+
+volatility_lm %>%
+  filter(bond_category %in% c("USGG3M", "USGG5YR", "USGG30YR")) %>%
+  mutate(Date = rep(as.Date(rolling_dates[,10]), 3)) %>%
+  ggplot(aes(Date, coefficients, colour = bond_category)) +
+  geom_line(size = 1.3, alpha = .2) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+      labs(title = "Linear coefficients for USGG3M, USGG5YR, and USGG30YR during high bond volatility periods",
+       y = "Coefficients",
+       x = "Date",
+       caption = "Source: Course Project Treasury Data")
+```
+
+Getting a clearer, untangled view of the lines helps here as well. The USGG5YR and USGG30YR look broadly similar and the USGG3M is noticeably different in some parts. As such, these visualizations are concurrent with findings emanating from the pairs plot. That said, I think this is a worse format just because a direct bivariate comparison cannot be made. While the univariate trend lines help illuminate each bond category over time more effectively, they are not as well suited for comparative analysis.
+
+```{r high volatility slope coefficients 2, warning=FALSE, message=FALSE}
+volatility_lm %>%
+  filter(bond_category %in% c("USGG3M", "USGG5YR", "USGG30YR")) %>%
+  mutate(Date = rep(as.Date(rolling_dates[,10]), 3)) %>%
+  ggplot(aes(Date, coefficients, colour = bond_category)) +
+  geom_line(size = 1.3, alpha = .6, show.legend = F) +
+  facet_wrap(facets = "bond_category", ncol = 1) +
+  geom_hline(yintercept = 0, colour = "mediumorchid3", alpha = .8, size = 1.3) +
+      labs(title = "Linear coefficients for USGG3M, USGG5YR, and USGG30YR during high bond volatility periods",
+       y = "Coefficients",
+       x = "Date",
+       caption = "Source: Course Project Treasury Data")
+```
+
+As per the analysis, I've included the high slope spreads and jump slopes. The first, high slope spreads, highlights major differences (greater than 3) between the five and thirty-year bond slope coefficients. There are 26 such instances in the coefficients set.
+
+```{r high slope spreads}
+coefficients %>%
+  mutate(Date = as.Date(rolling_dates[,10]),
+         high_slope_spread = USGG5YR - USGG30YR) %>%
+  filter(high_slope_spread > 3) %>%
+  select(Date, high_slope_spread) %>%
+  custom_kable()
+```
+
+The jump slope highlights only one instance where USGG5YR was above 3 for the slope coefficient.
+
+```{r jump slopes}
+coefficients %>%
+  mutate(Date = as.Date(rolling_dates[,10])) %>%
+  filter(USGG5YR > 3) %>%
+  select(Date, USGG5YR) %>%
+  custom_kable()
+```
+
+
+###Plot the rolling R2 values. What could cause a decrease of R2?
+
+As a next step, I've put together the rolling R2 values for the high volatility periods. It's fairly standard work at this point with the change that `rollapply` captures the R2 here. Since I already have the rolling dates object, it's easy to put them into a new data frame with the R2 values.
+
+```{r R2 volatility values}
+r_squared <- rollapply(bond_regression[,-1],
+                       width = window_width,
+                       by = window_shift,
+                       by.column = FALSE,
+                       FUN = function(z) summary(lm(Output1 ~ USGG3M + USGG5YR + USGG30YR, data = as.data.frame(z)))$r.squared)
+
+r_squared <- as.data.frame(r_squared) %>%
+  mutate(Date = as.Date(rolling_dates[,10])) %>%
+  select(Date, r_squared)
+
+head(r_squared, 10) %>%
+  custom_kable()
+```
+
+The plot highlights that the R2 values are extremely high throughout but, with some notable exceptions. While the R2 mean rests around .99, on several windows it goes as low as about .82. Why might this be happening?
+
+```{r R2 volatility plot}
+r_squared %>%
+  ggplot(aes(Date, r_squared)) +
+  geom_jitter(alpha = .2, colour = "dodgerblue2") +
+  geom_hline(yintercept = mean(r_squared$r_squared), 
+             colour = "mediumorchid3", alpha = .8, size = 1.3) +
+  scale_y_continuous(breaks = seq(.8, 1, .02)) +
+  labs(title = "R squared for model including USGG3M, USGG5YR, and USGG30YR during high bond volatility periods",
+       subtitle = "Mean R2 value (purple line) shows very high variance explanation by model",
+       y = "R Squared",
+       x = "Date",
+       caption = "Source: Course Project Treasury Data")
+```
+
+To start a decrease in R2 signals that the model is not explaining as much of the total variance in the output. This would occur at time when there is a difference in the otherwise very strong correlation (given R2 is a transformed version of correlation, R). Below, the dates when R2 slips below .9 are highlighted.  
+
+```{r low r squared days}
+r_squared %>%
+  filter(r_squared < .9) %>%
+  custom_kable()
+```
+
+Volatility is the first thing that comes to mind as a cause for decreased R2. If some window volatility caused the output to fluctuate but, not in complete concert with predictors, R2 could reasonably drop. However, this doesn't really come across in the table below. I'm obviously using a rough eye test of the volatility here but, not major differences pop out.
+
+```{r volatility review for low rsquared dates}
+plot_sd %>%
+  filter(Date %in% c("1987-06-25", "1991-06-28", "2005-04-29", "2012-06-21")) %>%
+  group_by(bond_category) %>%
+  custom_kable()
+```
+
+Nor is a major volatility difference evident in the plot below which compares the median volatility across the three bond categories and Output1. Again, this is a rough comparison given I've combined the bond volatility and it also does not consider any covariance or slope but, volatility differences don’t seem to be a huge influence.
+
+```{r volatilty bivariate}
+as.data.frame(rolling_sd) %>%
+  select(USGG3M, USGG5YR, USGG30YR, Output1) %>%
+  mutate(sd_apply = apply(rolling_sd[,1:3], 1, median),
+         Date = plot_sd$Date[1:1656],
+         low_rsquare = ifelse(Date %in% c("1987-06-25", "1991-06-28", 
+                                           "2005-04-29", "2012-06-21"),
+                              "low R2 day", "outside scope")) %>%
+  ggplot(aes(sd_apply, Output1, colour = low_rsquare)) +
+  geom_jitter() +
+  labs(title = "Volatility comparison for Output1 and median combination of USGG3M, USGG5YR, and USGG30YR",
+       subtitle = "Low R2 days don't seem to stick out as major volatilty difference days",
+       y = "Output1 rolling sd",
+       caption = "Source: Course Project Treasury Data")
+```
+
+I also thought plotting markers highlighting these low R2 days might be useful. I mentioned there might be days when the slope changes in bond categories and the output might not align leading to a lower R2. Each red line highlights the lowest R2 dates, which do seem to occur on steep changes for output. However, there seem to be steeper changes and more obvious disconnects between bond rates and output1 so this is inconclusive, though still interesting.
+
+```{r low rsquared dates on time series plot}
+bond_trend <- treasury_data %>%
+  select(-Easing, -Tightening) %>%
+  melt(value.name = "interest.rate", 
+       variable.name = "treasury.yield",
+       id.vars = "Date")
+
+bond_trend %>%
+  ggplot(aes(Date, interest.rate, colour = treasury.yield)) +
+  geom_line(size = 1.3, alpha = .4) +
+  scale_y_continuous(breaks = seq(-20, 30, 5)) +
+  geom_hline(yintercept = 0, colour = "royalblue2", size = 1.3, alpha = .3) +
+  geom_vline(xintercept = as.Date(c("1987-06-25", "1991-06-28", 
+                            "2005-04-29", "2012-06-21")),
+             colour = "#EE6363", size = 1.3, linetype = "dashed",
+             alpha = .75) +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  labs(title = "Assessing low R2 days using time series plot of all bond classes and output",
+       subtitle = "Low R2 seem to occur on days with steep changes in output; results are observational though so nothing confirmed",
+       caption = "Source: Course Project Treasury Data",
+       y = "interest rate (and unknown output values)")
+```
+
+Another idea for the lowered R2 comes from a broader extrapolation about the predictors and Output1. I've already shown that with a full model, the R2 is a perfect 1. With this in mind, it seems reasonable to assume that the other four bond categories explain the missing variance not included here. It could be these four bond categories do a better job of explaining the output on these days and even some volatility throws off the included three enough to diminish the R2. As such, this could possibly be a few streaks of randomness where these three happen to be lower than usual. Overall though, despite not having a perfect causal explanation, there is at least some instructive theories to work with.
+
+
+###Analyze the rolling p-values. Plot the values and provide an interpretation
+
+The rolling p-values are again obtained using `rollapply`. These p-values are from the slope tests for each bond category and the intercept for Output1. Given this, they signify which variables are significant in the wider three term model or whether the intercept coefficient is significant.
+
+```{r rolling p-values}
+p_values <- rollapply(bond_regression[,-1],
+                       width = window_width,
+                       by = window_shift,
+                       by.column = FALSE,
+                       FUN = function(z) summary(lm(Output1 ~ USGG3M + USGG5YR + USGG30YR, data = as.data.frame(z)))$coefficients[,4])
+
+p_values <- as.data.frame(p_values) %>%
+  mutate(Date = as.Date(rolling_dates[,10])) %>%
+  rename(Intercept = "(Intercept)")
+
+p_values %>%
+  select(Date, Intercept, USGG3M, USGG5YR, USGG30YR) %>%
+  head(10) %>%
+  custom_kable()
+```
+
+Plotting these values highlights which predictor slope coefficients are significant. Perhaps more telling, it clearly shows which inputs have the most non-significant coefficients. At a glance, it looks like the USGG30YR term has the most non-significant p-values by a large margin. Beyond that, it appears USGG3M has the most significant coefficients. It also looks like the intercept is always significant.
+
+At first glance, it might be surprising to have so many non-significant predictors come up in a model that is almost certainly always significant (judging by the high R2s and the linear model summaries from previous sections). Again though, the effects of multicollinearity likely influence this result.
+
+```{r p-value visualization, cache=TRUE}
+plot_pvalue <- melt(p_values, 
+                    id.vars = "Date", 
+                    variable.name = "bond_category",
+                    value.name = "rolling_pvalue")
+
+plot_pvalue %>%
+  ggplot(aes(Date, rolling_pvalue, colour = bond_category, shape = bond_category)) +
+  geom_jitter(size = 4, alpha = .75) + 
+  geom_hline(yintercept = .05, colour = "darkorange", alpha = .3, size = 1.5) +
+  scale_shape_manual(values = 49:52) +
+  guides(alpha = guide_legend(override.aes = list(alpha = 1))) +
+  labs(title = "Slope and intercept p-values for model containing Output1 ~ USGG3M, USGG5YR, and USGG30YR",
+       subtitle = "USGG30YR appears to have the most non-significant slope coefficients in rolling lm (orange line is .05 p-value threshold)",
+       caption = "Source: Course Project Treasury Data")
+```
+
+Confirming the previous intuition stemming from the p-value plot, the table below shows that USGG30YR had 773 p-values over the significance threshold of .05 (about 47% of all samples), which was by far the most of all the predictors.
+
+```{r p-value review}
+plot_pvalue %>%
+  group_by(bond_category) %>%
+  filter(rolling_pvalue > .05) %>%
+  count() %>%
+  summarise(non_significant_n = n,
+            non_significant_percent = round(n / 1657 * 100)) %>%
+  arrange(desc(non_significant_n)) %>%
+  custom_kable()
+```
+
+The following few chunks also highlight what dates these high p-values correspond to using a .5 threshold. This includes 312 dates total, which I've truncated to include five samples from each bond category (for space saving purposes). All samples can be seen by removing the `slice` function. 
+
+```{r .5 p-value threshold review, message=FALSE, warning=FALSE}
+plot_pvalue %>%
+  group_by(bond_category) %>%
+  filter(rolling_pvalue > .5) %>%
+  select(Date, rolling_pvalue) %>%
+  arrange(desc(rolling_pvalue)) %>%
+  slice(1:5) %>%
+  custom_kable()
+```
+
+
+***
+
+##Part 7: Principal Component Analysis
+
+The final section of the project deals with Principal Component Analysis (PCA). This statistical method breaks down predictors into new variables that are orthogonal and thereby uncorrelated. Given the analysis has shown how highly correlated the bond categories are, PCA seems ideal for this data set.
+
+###Perform PCA with all the input bond categories
+
+Beginning the analysis, I've created a PCA specific set that only includes the bond category predictors. PCA is not performed on the outcome variable, so Output1 is omitted.
+
+```{r pca set up}
+pca_set <- treasury_data %>%
+  select(USGG3M, USGG6M, USGG2YR, USGG3YR, USGG5YR, USGG10YR, USGG30YR)
+
+c(pca_rows = dim(pca_set)[1], pca_columns = dim(pca_set)[2]) %>%
+  custom_kable()
+```
+
+Taking a quick look at the new data frame, the PCA set can be seen below.
+
+```{r pca set review}
+head(pca_set) %>%
+  custom_kable()
+```
+
+To reaffirm the extreme correlation between predictors, I put together a pairwise plot below. As seen, the predictors are highly, and almost perfectly, correlated.
+
+```{r pca set exploration}
+pca_set %>%
+  select(USGG3M, USGG2YR, USGG5YR) %>%
+  ggpairs(title = "Pairwise plot for USGG3M, USGG5YR, and USGG30YR",
+          lower = list(continuous = regression_pairs))
+```
+
+Code for a 3D representation of this plot can be found below (although it will not produce an output in the R markdown file).
+
+```{r 3d plot}
+pca_set %>%
+  select(USGG3M, USGG2YR, USGG5YR) %>%
+  rgl.points()
+```
+
+
+####Manually create a covariance matrix. Use a contour plot to visualize results
+
+The covariance matrix is an essential component of PCA. The technique relies on getting the eigenvalues for this matrix, which make up the amount of variance each principle component explains (which is generally scaled to a percentage). At the same time, PCA factor scores are derived by multiplying the centred original data set (i.e. each column has its mean subtracted) with the resulting eigenvectors. Additionally, the eigenvector matrix comprises the PCA loadings. Given this, a necessary starting point is developing this covariance object. 
+
+While R has a built-in function to get this matrix, `cov`, I've developed my own function to illuminate how the process works. The covariance matrix is found by centring each variable in the data set, which in this case means taking the average yield rate by bond category and subtracting it from each rate value. From there, the new centred matrix is multiplied against itself. For this to work, the first matrix term has to be transposed (7 x 8300 * 8300 x 7). The resulting square, symmetric matrix (7 x 7) is the unnormalized covariance matrix. To perform the normalization, each matrix element is divided by the number of rows in the PCA set minus one (accounting for degrees of freedom). Following this, the covariance matrix is fully constructed. The function I developed, `manual_covariance`, follows these steps as seen in the chunk below.
+
+```{r manual covariance matrix}
+manual_covariance <- function(dataset){
+  centred_matrix <- as.matrix(scale(dataset, scale = F))
+  covariance_matrix <- t(centred_matrix) %*% centred_matrix
+  covariance_matrix <- covariance_matrix / (nrow(dataset) - 1)
+  custom_kable(covariance_matrix)
+}
+
+manual_covariance(pca_set)
+```
+
+To confirm if the new function returns the correct matrix, I've check it against the `cov` function. As seen, the results are the same.
+
+```{r covariance matrix using R}
+covariance_matrix <- as.data.frame(cov(pca_set))
+
+covariance_matrix  %>%
+  custom_kable()
+```
+
+The covariance matrix can be visualized using a slightly modified contour plot. Normally, a contour plot requires a numeric x and y-axis. To relax this constraint, each bond category can be turned into a number, with USGG3M and USGG6M becoming decimals (.25 and .5 for a quarter and half year). From there, the plot can be constructed.
+
+I've added in dots to signal where each bond class value meets with another in the covariance matrix. For example, the USGG30YR and USGG30YR point in the matrix is 7.624, which is labelled in the plot's far right corner. A contour plot normally has a third variable to interpret (z) but, since the both the x and y-axis are the same values, there isn't any actually density to review. That said, it's still an effective way to visualize the covariance matrix.
+
+```{r contour plot, warning=FALSE}
+contour_plot <- covariance_matrix %>%
+  mutate(bond = c(.25, .5, 2, 3, 5, 10, 30))
+
+contour_plot <- melt(contour_plot, id.vars = "bond")
+
+contour_plot %>%
+  mutate(value = round(value, 3),
+         bond = as.numeric(bond),
+         y = rep(c(.25, .5, 2, 3, 5, 10, 30), each = 7),
+         label_marker = ifelse(value < 8 | value == 9.583 | value == 11.543, T, F )) %>%
+  ggplot(aes(bond, y, z = value, label = ifelse(label_marker, value, NA))) +
+  geom_contour(size = 1.3) +
+  geom_point(size = 2, colour = "darkorange") +
+  geom_label() +
+  scale_x_continuous(breaks = seq(0, 30, 5)) +
+  scale_y_continuous(breaks = seq(0, 30, 5)) +
+    labs(title = "Contour plot for bond categories",
+       subtitle = "Each orange dot represents the covariance intersect of a bond category",
+       x = "bond category",
+       y = "bond category",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Perform the PCA by manually calculating factors, loadings. Find eigenvalues and eigenvectors. Calculate the vector of means (zero loading) and the first 3 loadings and factors. 
+
+I've already described this process but, I'll briefly reiterate it again. To derive the principle component factors, loadings, and factor scores, a series of matrix multiplication operations take place. This starts with a standardized matrix, which is the PCA set with each column mean subtracted (Y naught). This is used to find a covariance matrix between all the bond category yield rates. Thereafter, the covariance matrix is used to find eigenvalues and vectors. The decomposition is possible here because the covariance matrix has full rank and is symmetric. I've also included the factor matrix (F) which is the centred matrix multiplied by the eigenvector matrix, which produces factor scores.
+
+The initial calculations include all seven factors, which I'll reduce to factors one, two, and three given they are the analysis focus.
+
+```{r manual pca}
+centred_matrix <- as.matrix(scale(pca_set, scale = F))
+
+means_vector <- colMeans(pca_set)
+
+eigen_values <- eigen(covariance_matrix)$values
+
+eigen_vectors <- eigen(covariance_matrix)$vectors
+
+pca_factors <-  data.frame(
+  Date = treasury_data$Date,
+  centred_matrix %*% eigen_vectors) %>%
+  select(Date, X1, X2, X3) %>%
+  rename(F1 = X1,
+         F2 = X2,
+         F3 = X3)
+```
+
+As always with a manual process, it's good to check if everything went smoothly and the correct values were derived. To set up a comparison, I'll use the `princomp` function which is used to automate PCA. I'll check the eigenvector matrix, which are the loadings, against the one I developed. A comparison of the charts shows that they are the same, which validates the process. I'll provide a more robust comparison in a later section but, this is a good starting point since it validates the values I derived manually. With this in mind, I'll use my variables going forward.  
+
+```{r checking results against princomp function}
+bond_pca <- princomp(pca_set)
+
+bond_pca$loadings[,1:7] %>% 
+  custom_kable()
+
+rownames(eigen_vectors) <- bond_categories
+
+colnames(eigen_vectors) <- c("Comp.1", "Comp.2", "Comp.3", "Comp.4", "Comp.5",
+                             "Comp.6", "Comp.7")
+
+eigen_vectors %>%
+  custom_kable()
+```
+
+
+###Analyze the importance for PCA factors and loadings
+
+With the PCA process confirmed, I'll work towards conducting the factor and loadings review. Here, the real power of conducting a PCA analysis will become clear. To begin, there are seven factors to review, which are the eigenvalues from the previous step. 
+
+Eigenvalues here are a proxy for how much variance the analysis captures. These values, or factors, are essentially all the information from the original data set distilled into 7 values. They come ordered so the largest factor is first with decreasing importance thereafter. Each can be reviewed for how much variance it explains by dividing the eigenvalue by the sum of all factors.
+
+The variance explanations can then be charted, as seen below. Factor one captures about 98% of information from all the bond categories. This is fairly astounding but, given how highly correlated each predictor is, not totally unexpected. The power of PCA can be seen firsthand here: In essence, an entire set was compressed into seven factors, the first of which explains about 98% of the entire variance, or information, found in the data. That means that the remaining 2% is spread between the other six factors and, even then, mostly in factor two. As a whole, factors one and two more or less describe all seven predictors. The remaining five have very little information contained in them but, do contribute some marginal variance explanation.
+
+```{r importance plot for pca factors}
+as.data.frame(eigen_values) %>%
+  mutate(factors = c("F1", "F2", "F3", "F4", "F5", "F6", "F7"),
+         variance_explained = round(eigen_values / sum(eigen_values), 2),
+         factors = reorder(factors, variance_explained)) %>%
+  ggplot(aes(factors, variance_explained, 
+             label = paste0(variance_explained * 100,"%"))) +
+  geom_col(fill = "royalblue2") +
+  coord_flip() +
+  geom_label(hjust = .3, nudge_x = 0.05) +
+  labs(title = "PCA variance plot- Factor 1 provides most variance explanation (98%)",
+       caption = "Source: Course Project Treasury Data")
+```
+
+###Interpret the factors by looking at the shapes of the loadings
+
+Next are the loadings. As aforementioned, the focus here is on factors one through three, So I've created a data frame with just those for analysis. The faceted plot depicts the original loadings alongside a transformed version where F1 has been multiplied by -1 (which switches the value's sign).
+
+Starting with F1 (red line), it's clear that the factor is evenly represented across all bond categories, save for some minor fluctuations. F2 (blue line) displays heavy negative weightings on some of the short-term bonds, such as USGG3M and USGG6M, but slowly goes up in long-term bonds. F3 (blue line), forms a "U" shape with higher loadings in short and long-term bonds and decreasing values in the middle-term categories. F2 and F3 are fairly erratic and cross zero whereas F1 is much more stable.
+
+That more or less just describes their movement and shape though. Focusing on a wider interpretation here, there is further meaning to be described. Starting at USGG3M, F3 is the highest loading value with F1 and F2 much further down. As such, F3 can be thought of as capturing the most information from the bond class. Granted, this is probably noisy information given the factor only accounts for a small part of the data set information but, this at least adds an intuitive dimension to the analysis. F1 captures most categories evenly, which again makes sense given it accounts for 98% of the data's variance.  
+
+There's still a lesson here though: The lower variance factors do capture information on specific bond classes that F1 might not fully account for. F2 seems to have higher loadings than F1 and F3 for USGG3YR; while this might be noise, there could be some valuable outlier information here. In any case, thinking about the nuance of each of the factor loadings help get the most out of the PCA analysis.
+
+As a final macro point, all the loadings can be used to describe the day-to-day movement of the bond yields. Since the first factor captures the most information, it's movement can be used describe most yield movement. Since the loadings don’t change, they become a marker for rate change and could be applied on any day to find the daily yields in combination with other values.
+
+```{r importance plot for pca loadings, message=FALSE}
+pca_loadings <- data.frame(
+  eigen(covariance_matrix)$vectors) %>%
+  select(X1, X2, X3) %>%
+  rename(F1 = X1,
+         F2 = X2,
+         F3 = X3)
+
+pca_loadings <- melt(pca_loadings,
+                     variable.name = "factor",
+                     value.name = "pca_loadings")
+
+pca_loadings <- pca_loadings %>%
+  mutate(pca_loadings = ifelse(factor == "F1", pca_loadings * -1, pca_loadings)) %>%
+  bind_rows(pca_loadings) %>%
+  mutate(loading_class = ifelse(seq(pca_loadings) == 1:21, "F1 * -1", "original"),
+         loading_class = factor(loading_class, levels = c("original", "F1 * -1"))) %>%
+  select(factor, loading_class, pca_loadings)
+
+pca_loadings %>%
+  mutate(bond_category = rep(factor(bond_categories, levels = bond_categories), 6)) %>%
+  ggplot(aes(bond_category, pca_loadings, colour = factor, group = factor)) +
+  geom_line(size = 1.5) +
+  facet_wrap(facets = "loading_class", nrow = 2) +
+  scale_y_continuous(breaks = seq(-1, 1, .3)) +
+    labs(title = "PCA loadings by factor across all bond categories",
+         subtitle = "F1 even across all bonds, F2 shows negative loadings for short-term classes, F3 is low for medium-term bonds (original interpretations)",
+       caption = "Source: Course Project Treasury Data")
+```
+
+When assessing the factor scores, a familiar line is evident. In the top facet, factor one has been multiplied by -1 changing the score signs. Following this transformation, the line shows a strong resemblance to Output1. I'll come back to this in more depth shortly but, the output mystery is finally uncovered here.  
+
+In terms of interpretation, since factor one captures almost all of the bond category movement history, it's movement can be reviewed as a history of yield rate changes since 1981. In the early 1980s, all bond classes had very high yields relative to the rest of the samples. During this time, the F1 scores are at their highest. All of the previous analyses can be seen here too, such as the easing and tightening periods. Additionally, the big financial events, such as the 2008 are evident as well.  To offer a colloquial summation: As F1 goes, so too does the federal reserve bond yield rates.
+
+While F2 and F3 are fairly stable in comparison, they capture different bond information and can be thought of as sequential histories as well. Additionally, factor two captures noise that might be useful and not covered by F1. For example, around sample 2800, F2 rises slightly at a time when F1 is decreasing. Places where the lines are incongruent might offer insights that F1 omits but, is captured in another factor. Each factor also has a connection to the rates, though not nearly as strong or defined as F1.
+
+```{r pca factor scores plot, message=FALSE}
+factor_scores <- melt(pca_factors[,-1],
+                     variable.name = "factor",
+                     value.name = "factor_scores")
+
+factor_scores <- factor_scores %>%
+  mutate(factor_scores = ifelse(factor == "F1", factor_scores * -1, factor_scores)) %>%
+  bind_rows(factor_scores)
+
+factor_scores %>%
+  mutate(loading_class = rep(c("F1 * -1", "original"), each = 24900),
+         loading_class = factor(loading_class, levels = c("F1 * -1", "original")),
+         index = rep(seq(pca_factors$F1), 6)) %>%
+  ggplot(aes(index, factor_scores, colour = factor, group = factor)) +
+  scale_x_continuous(breaks = seq(0, 8500, 1000)) +
+  geom_line(size = 1.5) +
+  facet_wrap(facets = "loading_class", nrow = 2, scales = "free_y") +
+  labs(title = "PCA factor scores across all samples",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Plot Factor 1 against Factor 2. Draw at least three conclusions from the plot.
+
+To start, the shape of the plot reveals the orthogonal nature of each factor. By definition, these are linearly independent and as such, do not have any overlapping information. The result of this is a correlation of zero between F1 and F2 (1). The shape also highlights that F1 is leading F2, given the direction of the plot and the interaction of the points. This makes more sense from a time series perspective, which the underlying plot also contains (2). To make this clearer, I've added in a colour for each decade in the sample so the history of the two factors changing can be better reviewed.
+
+The spacing of points across each decade are revealing as well. For example, the spacing is more distant and sweeping in the 1980s, a period noted by large swings in day-to-day yield rates. In contrast, the factor scores in the 2010s are spaced much closer together. When reviewing the yield rates during that time, they appear very stable without any major shocks (3). Given this, this bivariate F1-F2 plot, much like the faceted factor score visualization, provides insight into the history of rate changes since 1981 (4). To highlight this, and to assist with audience comprehension, I've included date markers to help interpret the plot. Since it moves from right to left, which is traditionally not how time series are viewed, date markers help guide the viewer.
+
+```{r factor 1 vs factor 2, warning=FALSE}
+pca_factors <- pca_factors %>%
+  mutate(F1 = F1 * -1,
+         decade.marker = substr(as.character(Date), 1, 3),
+         decade = case_when(
+           decade.marker == "198" ~ "1980s",
+           decade.marker == "199" ~ "1990s",
+           decade.marker == "200" ~ "2000s",
+           decade.marker == "201" ~ "2010s")) %>%
+  select(Date, decade, F1, F2, F3)
+
+pca_factors %>%
+  mutate(date_indicate =  case_when(
+           Date == "1981-01-05" ~ "Start here: 1981",
+           Date == "2014-06-26" ~ "End here: 2014")) %>%
+  ggplot(aes(F1, F2, colour = decade, label = date_indicate)) +
+  geom_point(size = 3, alpha = .3) +
+  geom_label(hjust = .3, nudge_x = -5.5, nudge_y = -.5, fontface = "bold") +
+  scale_y_continuous(breaks = seq(-5, 5, 1)) +
+      labs(title = "PCA factor 1 vs 2 over time from 1981 to 2014 (right to left)",
+           subtitle = "Factor spacings indicate different yield volatilty across decades, factors are orthogonal (R = 0), F1 leading F2",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Analyze the adjustments that each factor makes to the term curve. Explain how loading shapes affect the adjustments using only factor 1, factors 1 and 2, and all 3 factors.
+
+The factor adjustments shape the yield term curves in different ways. I've included a faceted plot to compare both term curves with individual and combined factor influence. This comparison allows for an easier visual comparison of how each factor influences the curve. Overall, F1 provides a parallel shift for the line, F2 provides a slope change, and F3 affects the middle curvature of the term curve.
+
+```{r curve adjustment review, message=FALSE}
+pca_loadings <- data.frame(
+  eigen(covariance_matrix)$vectors) %>%
+  select(X1, X2, X3) %>%
+  mutate(X1 = X1 * -1)
+
+old_curve <- treasury_data[135,2:8]
+
+new_curve <- treasury_data[136,2:8]
+
+factor_change <- pca_factors[136,3:5] - pca_factors[135,3:5]
+
+curve_change <- old_curve - new_curve
+
+F1_adj <- old_curve + (t(pca_loadings[,1]) * as.numeric(factor_change[1]))
+
+F2_adj <- old_curve + (t(pca_loadings[,1]) * as.numeric(factor_change[1])) +
+  (t(pca_loadings[,2]) *  as.numeric(factor_change[2]))
+
+F3_adj <-  old_curve + (t(pca_loadings[,1]) * as.numeric(factor_change[1])) +
+  (t(pca_loadings[,2]) *  as.numeric(factor_change[2])) +
+  (t(pca_loadings[,3]) *  as.numeric(factor_change[3]))
+
+F2 <- old_curve + (t(pca_loadings[,2]) *  as.numeric(factor_change[2]))
+
+F3 <-  old_curve + (t(pca_loadings[,3]) *  as.numeric(factor_change[3]))
+ 
+curve_adjustment <- bind_rows(old_curve, new_curve, F1_adj, F2_adj, F3_adj,
+                              old_curve, new_curve, F1_adj, F2, F3)
+
+curve_adjustment <- melt(curve_adjustment, 
+             variable.name = "bond_category", 
+             value.name = "curve_adjustment")
+
+curves <- c("Old Curve", "New Curve", "1-Factor Adj.", 
+                       "2-Factor Adj.", "3-Factor Adj.")
+
+adjustment <- c("All factors", "Individual factors")
+
+curve_adjustment <- curve_adjustment %>%
+  mutate(adjustment = factor(rep(adjustment, each = 5, 7), levels = adjustment),
+         curve = factor(rep(curves, 14), levels = curves))
+
+curve_adjustment %>%
+  ggplot(aes(bond_category, curve_adjustment, colour = curve, group = curve)) +
+  geom_line(size = 1.5, alpha = .4) +
+  facet_wrap(facets = "adjustment", nrow = 2) +
+  scale_y_continuous(breaks = seq(10, 18, .5)) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  labs(title = "Yields rates by category with adjusted term curves for individual and combined factors",
+       subtitle = "F1 provides parallel shift, F2 provides change of slope, F3 changes middle curvature",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Explore the goodness of fit for the 10Y yield
+
+The USGG10YR approximations are very close to the actual values. These are derived by using the mean value for USGG10YR (taken from the vector of means) in combination with the first three loadings for the bond category multiplied by all three factors.
+
+```{r approximation vs actual}
+ten_year <- data.frame(
+  pca_approx = means_vector[6] +
+  pca_loadings[6,1] * 
+  pca_factors[,3] + 
+  pca_loadings[6,2] *
+  pca_factors[,4] + 
+  pca_loadings[6,3] * 
+  pca_factors[,5],
+  USGG10YR = treasury_data$USGG10YR
+)
+
+ten_year %>%
+  slice(1:10) %>%
+  custom_kable()
+```
+
+Two metrics provide insight into the goodness of fit. Mean absolute error (MAE) provides insight on how large the average miss between the approximation and actual values are. It indicates the average miss was only about .038. Mean absolute percentage error (MAPE) is very similar but, provides a percentage the approximation was off from the actual. Here, the approximations were, on average, about .757% off from the actual. Again, this points to a very close fit between the approximations and actuals.
+
+```{r approximation accuracy}
+ten_year %>%
+  summarise(MAE = round(mean(abs(pca_approx - USGG10YR)), 3),
+            MAPE = round(mean(MAE / USGG10YR * 100), 3)) %>%
+  custom_kable()
+```
+
+The plot of both lines is, unsurprisingly, indicative of a very close fit as well. In fact, both lines look nearly identical, which expected given the average miss is so low.
+
+```{r goodness of fit 10yr, message=FALSE}
+ten_year <- melt(ten_year, 
+             variable.name = "value_composition",
+             value.name = "USGG10YR")
+
+ten_year %>%
+  mutate(index = rep(seq(treasury_data$USGG10YR), 2)) %>%
+  ggplot(aes(index, USGG10YR, colour = value_composition)) +
+  geom_line(aes(size = value_composition), alpha = .65) +
+  scale_size_manual(values = c(2, 1)) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  scale_colour_manual(values = c("darkorange", "royalblue2")) +
+  labs(title = "Actual USGG10YR yield vs PCA approximated numbers- values are very closely aligned",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Repeat the PCA using `princomp` function
+
+I began this process already simply because I wanted to vet my manual values before using them in this section of the analysis. However, I only provided a cursory check so I'll do a more thorough review here. I've already developed the PCA object for the predictors so in the first chunk, I'm just seeing what names are associated with it.
+
+```{r pca comparison}
+c(pca_names = names(bond_pca)) %>%
+  custom_kable()
+```
+
+The eigenvector matrix and loadings were done in my first comparison but, to reiterate here using the first three factors, the values are the same, save for sign differences in factor two.  
+
+```{r loadings comparison}
+data.frame(
+  bond_pca$loadings[,1:3],
+  eigen_vectors[,1:3]) %>%
+  custom_kable()
+```
+
+In the same vein, the loadings plot is the same as well.
+
+```{r pca loadings plot}
+pca_loadings <- melt(bond_pca$loadings[1:7,1:3],
+                     variable.name = "factor",
+                     value.name = "pca_loadings")
+
+pca_loadings <- pca_loadings %>%
+  mutate(pca_loadings = ifelse(Var2 == "Comp.1", pca_loadings * -1, pca_loadings)) %>%
+  bind_rows(pca_loadings) %>%
+  mutate(loading_class = ifelse(seq(pca_loadings) == 1:21, "F1 * -1", "princomp"),
+         loading_class = factor(loading_class, levels = c("princomp", "F1 * -1"))) %>%
+  rename(factor = Var2,
+         bond_category = Var1) %>%
+  select(bond_category, factor, loading_class, pca_loadings)
+
+pca_loadings %>%
+  ggplot(aes(bond_category, pca_loadings, colour = factor, group = factor)) +
+  geom_line(size = 1.5) +
+  facet_wrap(facets = "loading_class", nrow = 2) +
+  scale_y_continuous(breaks = seq(-1, 1, .3)) +
+    labs(title = "PCA loadings by factor across all bond categories using princomp",
+       caption = "Source: Course Project Treasury Data")
+```
+
+This also holds true for the factor scores plot.
+
+```{r pca factor scores plot for princomp}
+factor_scores <- melt(bond_pca$scores[,1:3],
+                     variable.name = "factor",
+                     value.name = "factor_scores")
+
+factor_scores <- factor_scores %>%
+  mutate(factor_scores = ifelse(Var2 == "Comp.1", factor_scores * -1, factor_scores)) %>%
+  bind_rows(factor_scores) %>%
+  select(-Var1)
+
+factor_scores %>%
+  rename(factor = Var2) %>%
+  mutate(loading_class = rep(c("F1 * -1", "princomp"), each = 24900),
+         loading_class = factor(loading_class, levels = c("F1 * -1", "princomp")),
+         index = rep(seq(pca_factors$F1), 6)) %>%
+  ggplot(aes(index, factor_scores, colour = factor, group = factor)) +
+  scale_x_continuous(breaks = seq(0, 8500, 1000)) +
+  geom_line(size = 1.5) +
+  facet_wrap(facets = "loading_class", nrow = 2, scales = "free_y") +
+  labs(title = "PCA factor scores across all samples from princomp",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###What is Output1?
+
+Put simply, Output1 is the factor scores from F1 as derived from the PCA analysis. This means that it is essentially a meta-feature of information compiled from all the original bond category data, which is a linear combination of the predictors. Output1 captures about 98% of the information from all the yield rates making it a very good indicator of how all the bond categories move in one condensed variable. Given all the yields are so closely correlated, PCA is a very reasonable approach here. From a practical point of view, this would be an excellent addition to any financially based analyses where the project called for using the treasury yields because it captures so much rate information while also providing dimensional reduction.  That said, the models developed throughout the analysis aren’t really useful for wider predictions since they gauge the predictors relationship to themselves.  
+
+```{r uncovering output1 identity}
+output_uncovered <- data.frame(
+  value_composition = rep(c("Output1 from data", "Manual Factor 1", "Princomp F1"),
+                          each = 8300),
+  values = as.vector(c(treasury_data$Output1, pca_factors[,3], bond_pca$scores[,1] * -1))
+)
+
+output_uncovered  %>%
+  mutate(index = rep(seq(treasury_data$Output1), 3)) %>%
+  ggplot(aes(index, values, colour = value_composition)) +
+  geom_line(aes(size = value_composition), alpha = .65) +
+  scale_size_manual(values = c(3, 2, 1)) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  scale_colour_manual(values = c("gray", "darkorange", "royalblue2")) +
+  labs(title = "Output1, manual factor 1 scores, and princomp factor 1 scores- plot shows perfect fit between all three groups",
+       subtitle = "Output1 is the factor scores from F1 as derived from the PCA analysis",
+       caption = "Source: Course Project Treasury Data")
+```
+
+
+###Compare the regression coefficients from Step 2 and Step 3 with factor loadings
+
+This table clearly highlights that the slope and intercept coefficients from the switched regression (with Output1 as the predictor and each bond category as the outcome variable) equal to the PCA loadings and centres (variable means).  
+
+```{r output coefficients vs factor loadings}
+data.frame(
+  t(apply(treasury_data[,2:8], 2, 
+        function(x) summary(lm(x ~ Output1, treasury_data))$coefficients[1:2])),
+  pca_centres = bond_pca$center, 
+  pca_loadings = bond_pca$loadings[,1] * -1) %>%
+  rename(regression_intercept = X1,
+         regression_slope = X2) %>%
+  custom_kable()
+```
+
+
+###Is there a correspondence between the coefficients of models Output1~Yield and the first loading?
+
+Using the centred matrix I constructed earlier, this line of inquiry can be reviewed.
+
+```{r centered matrix dimensions}
+c(dim = dim(centred_matrix)) %>%
+  custom_kable()
+```
+
+The same process as before can be applied, which shows that the original model (Output1 ~ predictors) has slope coefficients equal to the slope coefficients of the centred matrix linear model.
+
+```{r checking Output1~Yield and the first loading correspondence}
+centred_matrix <- as.data.frame(centred_matrix) %>%
+  mutate(Output1 = treasury_data$Output1)
+
+t(data.frame(
+  original_lm = t(apply(treasury_data[,2:8], 2, 
+        function(x) summary(lm(Output1 ~ x, treasury_data))$coefficients[2])),
+  centred_lm = t(apply(centred_matrix, 2, 
+        function(x) summary(lm(Output1 ~ x, centred_matrix))$coefficients[2]))))%>%
+  custom_kable()
+```
+
+Building on this, the centred matrix slope coefficients are equal to the first row PCA loadings.
+
+```{r checking loadings from lm vs actuals}
+data.frame(
+  loadings = bond_pca$loadings[,1] * -1,
+  from_model = t(lm(Output1 ~ ., data = centred_matrix)$coef)[-1]) %>%
+  custom_kable()
+```
+
+
+***
+
+###References:
+
+
+#####Investopedia: Tight Monetary Policy
+
+https://www.investopedia.com/terms/t/tightmonetarypolicy.asp
+
+***
