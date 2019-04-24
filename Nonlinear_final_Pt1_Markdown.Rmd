@@ -1,0 +1,749 @@
+---
+title: "Non-linear Course Assignment"
+author: "Mark Preston"
+date: "August 25, 2018"
+output: 
+  html_document: 
+    fig_height: 6.75
+    fig_width: 10.5
+---
+
+***
+
+##Linear/Non-Linear Course Project: Part 1
+
+***
+
+###1. Problem Description
+
+The business analytic group of a company is asked to investigate causes of malfunctions in the technological process of one of the manufacturing plants that result in significant increase of cost for the end product of the business.
+
+One of suspected reasons for malfunctions is deviation of temperature during the technological process from optimal levels. The sample in the provided file contains times of malfunctions in seconds since the start of measurement and minute records of temperature.
+
+***
+
+###2. Loading Data and Packages
+
+I've started by loading the project data, which tracks manufacturing malfunctions. As seen, there are two variables to start: the time a malfunction took place and the temperature when it occurred.
+
+```{r loading data and packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(AER)
+library(MASS)
+library(pscl)
+library(copula)
+library(VineCopula)
+library(kableExtra)
+library(knitr)
+
+selectd <- dplyr::select
+
+#ggplot plotting theme preference
+theme_set(
+  theme_minimal()
+)
+
+#custom table function used throughout analysis
+custom_kable <- function(x){
+  kable(x, format = "html") %>%
+    kable_styling(bootstrap_options = "striped")
+}
+
+manufacturing <- read.csv("Nonlinear_final.csv")
+
+head(manufacturing) %>%
+  custom_kable()
+```
+
+***
+
+###3. Create the Counting Process and Explore Cumulative Intensity. What does it tell you about the character of malfunctions and the reasons causing them?
+
+To review the malfunctions, I've created a new variable which counts all the issues. This is simply the size of the data frame (3054 records) but, I'm formalizing the variables for review purposes.
+
+As the plot shows, the malfunction counts occur at a constant, linear rate. This seems to indicate that any malfunctions are steady and not in sporadic clusters. While the causes are unknown, the company is interested in investigating if temperature is associated with these issues. If temperature steadily rises during the manufacturing process, and in doing so moves past an optimal value, this might explain the problem. That said, this is merely an initial idea which can be reviewed more thoroughly going forward. Overall though, the issues seem to be persistent and not in any non-linear pattern.
+
+```{r counting processes}
+manufacturing <- manufacturing %>%
+  mutate(count = seq(1, nrow(manufacturing)))
+
+manufacturing %>%
+  ggplot(aes(count, Time)) +
+  geom_line(size = 1.4, colour = "dodgerblue2") +
+  labs(title = "Malfunctions seem constant and linear in nature- indicates issue is persistent and steady over time")
+```
+
+The cumulative intensity plot shows that while initial malfunctions rise very sharply, the issues seem to stabilize over the manufacturing time. The mean cumulative intensity (.21) is reached with in the first 1000 seconds or so and the cumulative intensity varies slightly afterwards until stabilizing around .24 and .20 for the remaining time. This is in contrast to the previous plot that showed a more linear state but, given this turns count into a rate, is likely more representative.
+
+```{r cumulative intensity}
+manufacturing %>%
+  mutate(cumulative_intensity = count / Time) %>%
+  ggplot(aes(Time, cumulative_intensity)) +
+  geom_line(size = 1.4, colour = "dodgerblue2") +
+  geom_hline(yintercept = nrow(manufacturing) / max(manufacturing$Time),
+             colour = "darkorange", size = 1.2, alpha = .4) +
+  geom_hline(yintercept = mean(manufacturing$count / manufacturing$Time),
+             colour = "darkorchid", size = 1.2, alpha = .4) +
+  scale_y_continuous(breaks = seq(0, .5, .02)) +
+  scale_x_continuous(breaks = seq(0, 15000, 3000)) +
+  labs(title = "Cumulative intensity shows initial spike in malfunctions which even out over time",
+       subtitle = "Mean cumulative intensity (.21, purple) and last cumulative intesnity level (.204, orange) highlight incidents over time")
+```
+
+The final cumulative intensity level is .204.
+
+```{r cumulative intensity measures}
+c(last_intensity = nrow(manufacturing) / max(manufacturing$Time),
+  mean_intensity = mean(manufacturing$count / manufacturing$Time)) %>%
+  custom_kable()
+```
+
+***
+
+###4. Check for overdispersion
+
+To do the over dispersion work, I'll work to convert the time variable in one minute breaks.
+
+```{r checking first 29 rows}
+manufacturing %>%
+  slice(1:29) %>%
+  custom_kable()
+```
+
+
+####Write your own code that creates One.Minute.Counts.Temps
+
+The approach I'm taking here is to divide time by 60 and then round it down (hence the `floor` function). Additionally, I've added one because the first minute becomes a zero otherwise. The issue when doing this, as seen in the `tail` print out, is that there appears to be minutes omitted in the data set. For example, the final minute is 250 but, there isn't a 249. As a result, the data frame derived from counting the temperatures at each minute segment contains 242 records when it should have 250.
+
+```{r creating minute count df, message=FALSE}
+minute_counts <- manufacturing %>%
+  mutate(minute_times = floor(Time / 60) + 1) %>%
+  count(minute_times, Temperature) %>%
+  rename(minute_count = n, 
+         minute_temps = Temperature) %>%
+  selectd(minute_times, minute_count, minute_temps)
+
+tail(minute_counts, 4) %>%
+  custom_kable()
+```
+
+To correct for this, I've made a second data frame with all 250 minute records and joined it with the initial minute counts set. Thereafter, I've filled the resulting missing values with zeroes given these minutes do not have any counts. I've also changed the minute times into 30 second interval markers as well. Following this, the minute counts data frame is ready and can be used for further review and modeling.
+
+```{r creating minute count df 2, message=FALSE}
+missing_time <- data.frame(minute_times = seq(1, max(minute_counts$minute_times), 1))
+
+minute_counts <- left_join(x = missing_time, y = minute_counts) %>%
+  mutate(minute_times = seq(30, n() * 60, 60),
+         minute_count = ifelse(is.na(minute_count), 0, minute_count))
+
+head(minute_counts, 10) %>%
+  custom_kable()
+```
+
+Using this data frame, the malfunction counts can be visualized. To start, I've plotted counts against the minute times. There doesn't seem to be any discernible pattern in the data, though the count is not uniform either.
+
+```{r counts vs times}
+minute_counts %>%
+  ggplot(aes(minute_times, minute_count)) +
+  geom_point(size = 2, alpha = .5, colour = "dodgerblue2") +
+  labs(title = "Counts vs minute times- malfunctions don't seem to show any noticeable pattern")
+```
+
+I also wanted to review temperatures and malfunction counts. As the line plot below highlights, there seems to be more manufacturing issues at higher temperatures, though the trend is fairly erratic. If the company has an optimal manufacturing temperature, it would be ideal to check this value against the trend.
+
+```{r temperature and counts}
+minute_counts %>%
+  filter(is.na(minute_temps) == F) %>%
+  ggplot(aes(minute_temps, minute_count)) +
+  geom_line(size = 1.4, colour = "dodgerblue2") +
+  labs(title = "Higher temperatures seem to be associated with more malfunction counts")
+```
+
+As another method of viewing the plot, I've turned each temperature into factor and used a box plot to assess the trend. There might be some methodological concern with binning the data her but, considering I'm using it for a quick trend review, I think it's fine. As seen, the upward trend between malfunctions and temperature is evident here. As a guess, it looks like the company's ideal manufacturing temperature is somewhere less than 101; after this, the malfunctions seem to rise sharply. This reveals that the malfunction distribution appears to be exponential or something similar.
+
+```{r temperature and counts 2}
+minute_counts %>%
+  filter(is.na(minute_temps) == F) %>%
+  mutate(minute_temps = round(minute_temps),
+         minute_temps = as.factor(minute_temps)) %>%
+  ggplot(aes(minute_temps, minute_count)) +
+  geom_boxplot(fill = "dodgerblue2", outlier.colour = "darkorange", outlier.size = 2) +
+  labs(title = "Higher temperatures seem to be associated with more malfunction counts",
+       subtitle = "Distribution may be exponential given sharp, non-linear rise after 101")
+```
+
+
+###4.1 Methods for Testing Over-Dispersion
+
+Moving forward, I'll test for over dispersion using a few different methods. The function simulates a Poisson distribution sample, estimates parameter lambda which is simultaneously the mean value and the variance, then it checks if DevianceDeg.Freedom − 1 belongs to the interval (−1.96,1.96]. If yes, the result is 1, otherwise it is 0. As seen, the result here is one, which indicates over dispersion.
+
+```{r manual over dispersion method}
+Test.Deviance.Overdispersion.Poisson<-function(Sample.Size,Parameter.Lambda){
+  my.Sample<-rpois(Sample.Size,Parameter.Lambda)
+  Model<-glm(my.Sample~1,family=poisson)
+  Dev<-Model$deviance
+  Deg.Fred<-Model$df.residual
+  (((Dev/Deg.Fred-1)/sqrt(2/Deg.Fred)>-1.96)&((Dev/Deg.Fred-1)/sqrt(2/Deg.Fred)<=1.96))*1
+} 
+c(overdispersion_test = Test.Deviance.Overdispersion.Poisson(100,1)) %>%
+  custom_kable()
+```
+
+When replicating this test 300 times, it shows a one in 259 instances. This is a strong sign that there might be over dispersion.
+
+```{r manual over dispersion method 2}
+c(repeated_test = sum(replicate(300,Test.Deviance.Overdispersion.Poisson(100,1)))) %>%
+  custom_kable()
+```
+
+Lambda can be estimated using the glm coefficient from a Poisson model. In this example, the intensity is about 2, which is outside the 1.96 range on the upper bound.
+
+```{r lambda estimation}
+set.seed(1017)
+exp(glm(rpois(1000, 2) ~ 1,family = poisson)$coeff) %>%
+  custom_kable()
+```
+
+Using a negative binomial option, the test shows no over dispersion (i.e. it does not pass the test).
+
+```{r manual over dispersion method for nb}
+Test.Deviance.Overdispersion.NBinom<-function(Sample.Size,Parameter.prob){
+  my.Sample<-rnbinom(Sample.Size,2,Parameter.prob)
+  Model<-glm(my.Sample~1,family=poisson)
+  Dev<-Model$deviance
+  Deg.Fred<-Model$df.residual
+  (((Dev/Deg.Fred-1)/sqrt(2/Deg.Fred)>-1.96)&((Dev/Deg.Fred-1)/sqrt(2/Deg.Fred)<=1.96))*1
+} 
+
+c(nb_overdispersion = 
+    sum(replicate(300,Test.Deviance.Overdispersion.NBinom(100,.2)))) %>%
+  custom_kable()
+```
+
+####Do you see signs of over-dispersion for the malfunction glm?
+
+Moving on the manufacturing malfunction model, the same over dispersion work can be performed. If the residual deviance returned by Poisson model is greater than n − k (i.e the degrees of freedom here) then, there might be over dispersion. The model print out shows a residual deviance value of 1799, which is well above n - k here. This highlights that there is likely over dispersion, though no formal test has been conducted.
+
+```{r poisson model}
+glm_poisson <- glm(minute_counts$minute_count ~ 1, family = poisson)
+```
+
+####4.1.2 Regression test by Cameron-Trivedi
+
+To test over dispersion with a statistical method, I'll use the Cameron-Trivedi approach. The method is a regression-based test for over dispersion in a Poisson Model. The result highlights the alternative hypothesis is accepted, which means that the true dispersion is greater than 1. The test shows a very small p-value so the strength of evidence is compelling here. This further confirms that there is over dispersion.
+
+```{r dispersion test}
+(disp_test <- dispersiontest(object = glm_poisson))
+```
+
+####4.1.3 Test against Negative Binomial Distribution. Does this test show overdispersion?
+
+Following the Poisson tests, I'll also try a negative binomial approach. The null hypothesis of this test is that the distribution is Poisson as particular case of negative binomial against Negative Binomial. The test here is significant with a very small p-value again, which shows that the mean and variance are not equal. As such, the distribution does not appear to be a particular case of the negative binomial. The finding shows that there is not over dispersion in this case.
+
+```{r dispersion test 2}
+glm_negbinom <- glm.nb(minute_count ~ 1, data = minute_counts)
+
+odTest(glmobj = glm_negbinom)
+```
+
+
+***
+
+###5. Find the distribution of Poisson intensity
+
+####5.1. Kolmlgorov-Smirnov test
+
+The Kolmogorov-Smirnov test is used to test hypotheses of equivalence between two empirical distributions or equivalence between one empirical distribution and one theoretical distribution. I'll be using this test to review several distributions, starting with two normals. Since both samples are being generated using `rnorm`, I know up front that they are the same distribution. However, they have slightly different central tendency indicators (mean and standard deviation) so they are not identical. This is on display in the Empirical Cumulative Distribution plot shown below.
+
+```{r cumulative density work}
+set.seed(1017)
+sample_one <- rnorm(100)
+sample_two <- rnorm(100, 1, 2)
+
+cumulative_dists <- data.frame(
+  sample = c(rep("one", each = 100), rep("two", each = 100)),
+  values = c(sample_one, sample_two)
+)
+
+cumulative_dists %>%
+  ggplot(aes(values, colour = sample)) +
+  stat_ecdf(size = 1.4) +
+  scale_colour_manual(values = c("dodgerblue2", "darkorange")) +
+  labs(title = "ECDF shows sample one and two do not appear exactly the same despite being normal",
+       subtitle = "Sample one (sd = 1, mean = 0) and Sample two (sd = 2, mean = 1) both normal with different central tendencies")
+```
+
+Formally, that can be tested using `ks.test`. The two sample test is reviewing whether the samples emanate from the same distribution. With a highly significant test, it's clear that they do in this case. The test doesn't make clear what distributions the samples come from, only that they are the same. Again, this result should be clear ahead of time given both samples come from `rnorm` but, the test result is a good precursor to other less clear applications. 
+
+```{r ks test for both samples}
+ks.test(sample_one, sample_two)
+```
+
+Each sample can independently be checked against the standard normal distribution as well. Here, the Kolmogorov-Smirnov test compares the empirical distribution of the given sample with the theoretical distribution. The null hypothesis here here is that they are the same, or more formally, the empirical distribution is consistent with the theoretical distribution. As seen below, the test fails to reject the null hypothesis indicating that distributions are the same. Since I set the sample parameters at mean = 0 and sd = 1, this is again the expected result.
+
+```{r ks test}
+ks.test(sample_one, "pnorm", mean = 0, sd = 1)
+```
+
+In the same vein, a `ks.test` for the second sample should be statistically significant since the parameters were set to mean = 1 and sd = 2. As seen, this is the result. This means that the alternative hypothesis is accepted and the distributions are not the same given the parameters (here mean = 0, sd = 1). With this result, I'm confident that the marginal distribution of the second sample does not have parameters equal to the values provided. In practical terms, this reinforces what was on display in the ecdf plot, namely that the distributions are not empirically the same.
+
+```{r ks test 2}
+ks.test(sample_two, "pnorm", mean = 0, sd = 1)
+```
+
+To reiterate, this doesn't mean that the second sample isn't normal, just that it isn't normal with the same parameters as mean = 0 and sd = 1. A `ks.test` with the parameters set to mean = 1 and sd = 2 is not significant (on display below) showing that the test satisfies a local test about the included parameters and not the distribution at large.
+
+```{r ks test 3}
+ks.test(sample_two, "pnorm", mean = 1, sd = 2)
+```
+
+####5.2. Check the distribution for the entire period
+
+The same KS approach can be used on the malfunction time intervals as well. These can be derived by taking the difference between each time record and the next issue. This set of values provides the running time series of how frequently malfunctions occur.
+
+Using another `ks.test`, it can be seen that the distribution is not exponential with the specified average intensity (rate parameter). The strength of evidence here is strong given the p-value is very small.
+
+```{r ks test for malfunctions}
+malfunction_interval <- data.frame(
+  mi = diff(manufacturing$Time)
+)
+
+ks.test(malfunction_interval$mi,
+        "pexp", 
+        rate = mean(manufacturing$count / manufacturing$Time)) 
+```
+
+The ecdf plot for the time intervals shows a curve that rises fast and then evens out around the fortieth record. 
+
+```{r ecdf for malfunction time intervals}
+malfunction_interval %>%
+  ggplot(aes(mi)) +
+  stat_ecdf(size = 1.4, colour = "dodgerblue2") +
+  scale_x_continuous(breaks = seq(0, 100, 10)) +
+  labs(title = "ECDF for time intervals between malfunctions",
+       x = "time intervals")
+```
+
+
+####5.3. Check distribution of one-minute periods. What distribution does this histogram remind you of? Use at least 5 different candidates for distribution of Poisson intensity of malfunctions.
+
+The histogram for one minute intensities (i.e. each count by time interval divided by 60) shows what appears to be an exponential distribution. That said, it could be gamma, although there's usually more a of build up on the left hand side prior to the mode. The distribution can be tested using the Kolmogorov-Smirnov approach but, these seem like good candidates to have in mind going forward.
+
+```{r events intensity}
+minute_counts <- minute_counts %>%
+  mutate(events_intensity = minute_count / 60)
+
+minute_counts %>%
+  ggplot(aes(events_intensity)) +
+  geom_histogram(boundary = .1, binwidth = .1, 
+                 colour = "lightgray", fill = "dodgerblue2") +
+  labs(title = "Events intensity for manufacturing malfunctions- Distribution appears exponential")
+```
+
+To do so, I'm using the `fitdistr` function to obtain the mean and standard deviation parameters for events intensity. As seen below, the values I've obtained match the assignment output.
+
+```{r normal fit}
+(normal_fit <- fitdistr(minute_counts$events_intensity, "normal"))
+```
+
+The same approach can be utilized for the exponential distribution.
+
+```{r exponential fit}
+(exp_fit <- fitdistr(minute_counts$events_intensity, "exponential"))
+```
+
+Following this, both of these distributions ca be used as part of the `ks.test` approach. the initial histogram did not look normal and the KS-test confirms this. As such, the intensity is not normal with parameters from the `fitdistr` object.
+
+```{r normal ks test for malfunctions, warning=FALSE}
+(normal_ks <- ks.test(minute_counts$events_intensity,
+                     "pnorm",
+                     mean = normal_fit$estimate[1],
+                     sd = normal_fit$estimate[2]))
+```
+
+Exponential was one of my first thoughts when assessing the histogram. However, the KS-test doesn't support this. The low p-value suggests the empirical distribution does not match the theoretical exponential one with the `fitdistr` object rate. I'm somewhat surprised here but, the test seems fairly conclusive. Still, there might be an option here with gamma, or another option I haven't considered yet. Following the first two tests though, the empirical distribution does not appear to be either normal or exponential (with the specified parameters at least).
+
+```{r exponential ks test for malfunctions, warning=FALSE}
+(exp_ks <- ks.test(minute_counts$events_intensity,
+                  "pexp",
+                  rate = exp_fit$estimate[1]))
+```
+
+For the next test, I'll check gamma, which is the other distribution I intuitively thought about. One issue with using the `fitdistr` option here is the sample contains zeroes and as such, the function provides an error. This yields a biased calculation because the degrees of freedom are reduced during the operation.
+
+```{r gamma fit, warning=FALSE}
+gamma_events <- minute_counts %>%
+  filter(is.na(minute_temps) == F) %>%
+  selectd(events_intensity)
+
+(gamma_fit <- fitdistr(gamma_events$events_intensity, "gamma"))
+```
+
+However, this work can be done manually. To calculate the moments for a gamma distribution, I'll need the mean and variance for intensity. The rate is calculated by dividing the mean with the variance. I've also standardized the value by multiplying it by 250/249 to account for the biased estimation when using `var`. The shape comes from the mean multiplied by itself (exponentiated) divided by variance. As seen in the printout, both values match the assignment.
+
+```{r manual gamma methods of moments}
+events_mean <- mean(minute_counts$events_intensity)
+
+events_var <- var(minute_counts$events_intensity)
+
+moments_rate <- events_mean / events_var * 250/249
+
+moments_shape <- events_mean ^ 2 / events_var  * 250/249
+
+c(manual_rate = moments_rate, manual_shape = moments_shape) %>%
+  custom_kable()
+```
+
+With both the shape and rate, I can conduct the gamma KS-test. With a p-value of only .3736, the null hypothesis is not rejected. This means that the empirical distribution is consistent with the theoretical distribution, which confirms my earlier intuition. I'll conduct two more tests but this looks like a promising choice.
+
+```{r gamma ks test, warning=FALSE}
+(gamma_ks <- ks.test(minute_counts$events_intensity,
+                    "pgamma",
+                    shape = moments_shape,
+                    rate = moments_rate))
+```
+
+I'm fairly confident with gamma but, I'll try Cauchy here. The print out shows a very low p-value indicating the empirical and theoretical distributions do not match.
+
+```{r cauchy fitdistr, warning=FALSE}
+cauchy_fit <- fitdistr(gamma_events$events_intensity, "cauchy")
+
+(cauchy_ks <- ks.test(minute_counts$events_intensity, 
+                 "pcauchy",
+                 location = cauchy_fit$estimate[1],
+                 scale = cauchy_fit$estimate[2]))
+```
+
+Another distribution it might be is Weibull. This distribution has a similar shape to the ecdf plot for the time intervals when using two parameters. Additionally, it can assume a shape similar to gamma. Using the KS-test, the distribution has a p-value over .05 and therefore, the null hypothesis is rejected. 
+
+```{r weibull fitdistr, warning=FALSE}
+weibull_fit <- fitdistr(gamma_events$events_intensity, "weibull")
+
+(weibull_ks <- ks.test(minute_counts$events_intensity, 
+                 "pweibull",
+                 shape = weibull_fit$estimate[1],
+                 scale = weibull_fit$estimate[2]))
+```
+
+####What distribution for the one-minute intensity of malfunctions do you choose? What distribution of one-minute malfunctions counts follow from your choice?
+
+I've aggregated all the test results below in one table to review them simultaneously. Looking at the table, I think choosing gamma is the most suitable choice. It has the highest p-value from the KS-test indicating the empirical distribution matches the theoretical distribution. I'm not as familiar with the Weibull distribution and it also has a lower p-value. Overall, this means that the one-minute malfunctions are best described by a gamma distribution.
+
+```{r reviewing all ks test}
+ks_results <- data.frame(
+  Distribution = c("Normal", "Exponential", "Gamma", "Cauchy", "Weibull"),
+  D_statistic = c(normal_ks$statistic, exp_ks$statistic, gamma_ks$statistic,
+              cauchy_ks$statistic, weibull_ks$statistic),
+  P_value = c(normal_ks$p.value, exp_ks$p.value, gamma_ks$p.value,
+               cauchy_ks$p.value, weibull_ks$p.value)
+)
+
+ks_results %>%
+  arrange(desc(P_value)) %>%
+  custom_kable()
+```
+
+
+***
+
+##Linear/Non-Linear Course Project: Part 2
+
+***
+
+For the second part, I'll be exploring possible types of dependence between one-minute counts and temperature. 
+
+```{r reviewing minute counts}
+head(minute_counts) %>%
+  custom_kable()
+```
+
+To do so, I'll start by removing the records with NAs from the first part. The initial data had 250 records with four variables but, I won't need to the missing records going forward. As a note, I added an extra column for the event intensity so it has one extra variable.
+
+```{r minute count dim}
+c(rows = dim(minute_counts)[1], 
+  columns = dim(minute_counts)[2]) %>%
+  custom_kable()
+```
+
+Following the data clean up, there is 242 records left, which indicates there was 8 with NA values.
+
+```{r removing nas}
+minute_counts <- minute_counts %>%
+  filter(is.na(minute_temps) == F)
+
+c(rows = dim(minute_counts)[1], 
+  columns = dim(minute_counts)[2]) %>%
+  custom_kable()
+```
+
+Moving ahead, I've plotted temperature against events intensity. I've added in both a linear and loess line to highlight that the relationship appears to be non-linear. The loess option (purple line) displays a bend that conforms to the data's shape better than the linear line. Even without the lines, a large upward trend if evident that doesn't seem linear. This conforms to the previous KS-tests which highlighted a non-linear distribution for events intensity (gamma).
+
+```{r temp vs intensity}
+minute_counts %>%
+  ggplot(aes(minute_temps, events_intensity)) +
+  geom_point(size = 2, alpha = .5, colour = "dodgerblue2") +
+  geom_smooth(method = "loess", se = F, colour = "darkorchid", size = 1.4) +
+  geom_smooth(method = "lm", se = F, colour = "darkorange", size = 1.4) +
+  labs(title = "Temperature vs events intensity- relationship appears to be non-linear",
+       subtitle = "Loess line (purple) shows large bend that fits data better than linear model (orange)")
+```
+
+####What type of dependency you see in the empirical copula?
+
+To assess any non-linear association further, I've plotted the empirical copula for temperature and events intensity. The scatter plot shows what appears to be an upper tail dependency, which is a Gumbel copula.
+
+```{r copula plot}
+copula_df <- minute_counts %>%
+  mutate(temp_rank = rank(minute_counts$minute_temps),
+         intensity_rank = rank(minute_counts$events_intensity)) %>%
+  selectd(minute_temps, temp_rank, events_intensity, intensity_rank)
+  
+copula_df %>%
+  ggplot(aes(temp_rank, intensity_rank)) +
+  geom_point(size = 2, alpha = .5, colour = "dodgerblue2") +
+  labs(title = "Emprical copula plot shows an upper tail dependency typical of a Gumbel Copula")
+```
+
+This means that at the lowest ranks, which are the highest temperatures and events intensity respectively, there's an association between the variables (i.e. high temperatures and high event intensity). The table highlights the bottom 10 ranked temperatures, most of which have a high corresponding intensity rank. I've also included the actual temperatures which are all well above 100. I included a plot in the first section showing a box plot high temperatures were associated with a large number of malfunctions; this is further confirmed here.
+
+```{r reviewing copula ranks, message=FALSE}
+copula_df %>%
+  arrange(desc(temp_rank)) %>%
+  slice(1:10) %>%
+  custom_kable()
+```
+
+####What is the distribution of temperatures?
+
+When plotting the temperature distribution, I think it looks normal. It isn't perfect but, the shape appears more or less normal.
+
+```{r temp distribution}
+minute_counts %>%
+  ggplot(aes(minute_temps)) +
+  geom_histogram(bins = 20, fill = "dodgerblue2") +
+  labs(title = "Temperature distribution appears generally normal")
+```
+
+Of course, this can be verified using a KS-test. Below, I'm again using `fitdistr` to derive the parameters to review with the `ks.test` function. The parameters for the distribution can be seen below.
+
+```{r normal temp fit}
+normal_fit <- fitdistr(minute_counts$minute_temps, "normal")
+
+c(normal_fit$estimate[1], normal_fit$estimate[2]) %>%
+  custom_kable()
+```
+
+The KS-test shows that the null hypothesis cannot be rejected and therefore, the empirical distribution matches the theoretical one provided by the parameters. Given the distributions are equivalent, the temperature distribution is normal.  
+
+```{r temp normal ks test}
+ks.test(minute_counts$minute_temps, 
+        "pnorm", 
+        mean = normal_fit$estimate[1], 
+        sd = normal_fit$estimate[2])
+```
+
+
+###Fit a copula. Select a parametric copula appropriate for the observed type of dependence.
+
+Before fitting an appropriate copula, I have to confirm what type is suitable in this case. I outlined that it looks like Gumbel is the right choice but, I'll work to confirm this before fitting. To do this, I'm first constructing the empirical copula data frame using the `pobs` function. This divides the rank of each variable by its length plus one. With this object, I've used the `BiCopSelect` function to derive the appropriate copula fit. As seen, it is Gumbel. 
+
+```{r copula fitting}
+empiric_copula <- as.data.frame(pobs(x = minute_counts[,3:4], ties.method = "average"))
+
+BiCopSelect(u1 = empiric_copula[,1], 
+            u2 = empiric_copula[,2], 
+            familyset = NA)
+```
+
+With the Gumbel selected, I've fit the copula and then printed the summary. My output here matches the assignment.
+
+```{r copula fitting 2}
+gumbel_copula <- gumbelCopula(param = 5, dim = 2)
+
+set_copula <- fitCopula(copula = gumbel_copula, 
+                        data = as.matrix(empiric_copula),
+                        method = "ml")
+
+summary(set_copula)
+```
+
+
+####Simulate 250 data points using the fitted copula. Make a 4-panel graph to represent a copula object.
+
+Below, I've used the `rCopula` to simulate 250 data points based on the fitted Gumbel copula. Following this, I've created a four panel visualization with the perspective, contour, and simulated and empirical copula plots. These are used to assess the copula fit and review how the simulated points look as well. The simulated copula looks slightly different from the empirical points but, it's still clearly Gumbel shape with upper tail dependency.
+
+```{r four panel copula plot}
+set.seed(8301735)
+sim_copula <- rCopula(n = 250, copula = gumbel_copula)
+
+par(mfrow = c(2, 2))
+persp(gumbel_copula, dCopula, main = "pdf")
+contour(gumbel_copula, dCopula, main = "pdf")
+plot(sim_copula, xlab = "Temperature", ylab = "Intensity", main = "Simulated Copula")
+plot(empiric_copula, xlab = "Temperature", ylab = "Intensity", main = "Empirical Copula")
+mtext("Copula Fit", side = 3, line = -2, outer = TRUE)
+```
+
+
+####Simulate 5000 pairs of intensities and temperatures using the estimated copula. Plot the simulated variables and their empirical copula.
+
+Increasing the number of points to 5000, I've simulated another round of records here. I've done this using two approaches. For the first, I used `mvdc` which creates a multivariate distribution from the Gumbel copula. By providing the distribution moments for both temperature and intensity, the function constructs the simulated values. As a note, I've used the `fitdistr` values for shape and rate from the first part where I filtered out the missing values. When done, the new data frame contains simulated records from both methods.
+
+```{r copula simulationa}
+sim_setup <- mvdc(copula = gumbel_copula, 
+                   margins = c("norm", "gamma"),
+                   paramMargins = list(list(mean = mean(minute_counts$minute_temps), 
+                                          sd = sd(minute_counts$minute_temps)),
+                                       list(shape = gamma_fit$estimate[1], 
+                                            rate = gamma_fit$estimate[2])))
+
+set.seed(8301735)
+copula_simulation <- as.data.frame(rMvdc(sim_setup, n = 5000)) %>%
+  rename(Temperature_sim = V1,
+         Intensity_sim = V2)
+
+set.seed(8301735)
+copula_simulation <- as.data.frame(rCopula(copula = gumbel_copula, n = 5000)) %>%
+  mutate(V1 = qnorm(p = V1, 
+                    mean = mean(minute_counts$minute_temps), 
+                    sd = sd(minute_counts$minute_temps)),
+         V2 = qgamma(p = V2, 
+                    shape = gamma_fit$estimate[1], 
+                    rate = gamma_fit$estimate[2])) %>%
+  rename(Temperature_sim = V1,
+         Intensity_sim = V2) %>%
+  bind_rows(copula_simulation) %>%
+  mutate(Simulation = c(rep("manual", each = 5000), rep("package", each = 5000))) %>%
+  selectd(Simulation, Temperature_sim, Intensity_sim)
+
+copula_simulation %>%
+  slice(1:3) %>%
+  bind_rows(copula_simulation[5001:5003,]) %>%
+  custom_kable()
+```
+
+The simulated values for both methods are the same. Both shows that there is a non-linear relationship between temperature and malfunction intensity.
+
+```{r simulated records plot}
+copula_simulation %>%
+  ggplot(aes(Temperature_sim, Intensity_sim, colour = Simulation)) +
+  geom_point(size = 2, alpha = .25, show.legend = F) +
+  facet_wrap(facets = "Simulation", scales = "free") +
+  scale_color_manual(values = c("dodgerblue2", "darkorange")) +
+  labs(title = "5000 simulated points based on gumbel copula for temperature and intensity",
+       subtitle = "Both simulation methods provide the same values")
+```
+
+Since both simulation methods yield the same results, I'll only plot the manual values for the copula. As seen, the simulated points show a strong upper tail dependency where high temperatures and high intensity are related (as shown by low ranks).
+
+```{r rank from simulation 5000}
+copula_simulation %>%
+  filter(Simulation == "manual") %>%
+  mutate(temp_rank = rank(Temperature_sim),
+         intensity_rank = rank(Intensity_sim)) %>%
+  ggplot(aes(temp_rank, intensity_rank)) +
+  geom_point(size = 2, alpha = .25, colour = "dodgerblue2") +
+  labs(title = "Copula for 5000 simulated points based on gumbel object")
+```
+
+####Use the initial sample of intensities and temperatures to fit the negative binomial regression
+
+To fit the negative binomial model I'll rely on the original data set. Once the model is developed, the fit can be assessed.
+
+```{r minute count negative binomial}
+intensity_negbinom <- glm.nb(minute_count ~ minute_temps, data = minute_counts)
+
+intensity_negbinom$coefficients %>%
+  custom_kable()
+```
+
+All the model components match the assignment here, so the development looks good.
+
+```{r coefficient matching}
+data.frame(
+  Parameter = c("deviance", "df_residual", "AIC"),
+  Values = c(intensity_negbinom$deviance, 
+             intensity_negbinom$df.residual, 
+             intensity_negbinom$aic)) %>%
+  custom_kable()
+```
+
+I've isolated the tail events here by filtering out records with an intensity greater than .5 and a temperature greater than 110. The plot shows an upward trend with counts and temperature.
+
+```{r neg biom model for tail data}
+tail_events <- copula_simulation %>%
+  filter(Simulation == "manual") %>%
+  filter(Intensity_sim > .5 & Temperature_sim > 110) %>%
+  mutate(Intensity_sim = round(Intensity_sim * 60))
+
+tail_events %>%
+  ggplot(aes(Temperature_sim, Intensity_sim)) +
+  geom_jitter(size = 2, alpha = .75, colour = "dodgerblue2") +
+  scale_x_continuous(breaks = seq(110, 120, 1)) +
+  labs(title = "Simulated tail events based on gumbel copula",
+       subtitle = paste0("Tail events include points > .5 intensity and > 110 temperature from original 5000 point simulation; Total records = ", nrow(tail_events)))
+```
+
+####Fit a negative binomial model to tail events. Compare the two models- What do the fitted parameters θ tell you about both models? What do both models tell you about the relationships between the temperature and the counts?
+
+To start the comparison, I've fit the negative binomial model to the new tails data. The model summary shows significant results for temperature. On top of this, temperature has a positive coefficient indicating the malfunction counts increase as temperature goes up. Unlike linear regression though, the value represents the difference in the log of expected counts of the malfunction is expected to go up by about .1. 
+
+The dispersion parameter (theta) highlights a very large over dispersion. If the distribution was best described by negative binomial, I would expect theta to be relatively small.
+
+```{r tail event negbinom glm, warning=FALSE}
+tail_negbinom <- glm.nb(Intensity_sim ~ Temperature_sim, data = tail_events)
+
+summary(tail_negbinom)
+```
+
+Just to confirm this thinking, I've run an over dispersion test, which fails to reject the null hypothesis.
+
+```{r tail odtest}
+odTest(glmobj = tail_negbinom)
+```
+
+The full set intensity negative binomial shows a good fit though given the low theta. This essentially indicates that while the negative binomial fits the entire distribution well, it's probably less effective for high temperatures. In essence, the tail events negative binomial helps support this by showing at the highest intensities and temperatures, over dispersion is present. That said, it still shows a similar, significant coefficient for temperature.
+
+```{r intensity neg binom summary}
+summary(intensity_negbinom)
+```
+
+####Is there an alternative model that could be fit?
+
+Count regression methods usually focus on either Poisson or negative binomial. However, a zero-inflated version of either could be used. Additionally, random effect count models pose an option as well.
+
+####Fit poisson model to the simulated tail events and compare the fit with the nagative binomial fit
+
+The negative binomial showed signs of over dispersion so the Poisson might be a better option. The residual deviance shows an improvement over the null model and, more importantly here, does not look over dispersed. the comparison here is being made by reviewing how close the residual deviance is to the degrees of freedom (remembering the informal test of checking n - k against the residuals).  
+
+```{r tail event poisson glm, warning=FALSE}
+tail_poisson <- glm(Intensity_sim ~ Temperature_sim, 
+                    data = tail_events, 
+                    family = poisson)
+
+summary(tail_poisson)
+```
+
+To make sure about this, I've run a dispersion test. The result is very convincing with the null hypothesis, true dispersion not greater than 1, not being rejected.
+
+```{r tail dispersion test for poisson model}
+dispersiontest(object = tail_poisson)
+```
+
+As a final check, I'm using the AIC from both models to check which one is better. Here, the model with the smaller AIC is preferable. Once again, this review shows the Poisson is preferable.
+
+```{r aic comparison}
+c(negbinom_aic = tail_negbinom$aic,
+  poisson_aic = tail_poisson$aic) %>%
+  custom_kable()
+```
+
+Overall, these findings all confirm that temperature seems to be a significant factor contributing to malfunctions.
+
+***
+
+###References
+
+- Weibull Distribution and Weibull Analysis: http://www.statisticshowto.com/weibull-distribution/
+
+***
